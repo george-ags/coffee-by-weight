@@ -63,7 +63,11 @@ class ControlManager:
         self.is_sleeping = False
         self.sleep_end_time = 0.0
         self.last_weight_check = 0.0
-        # -------------------------
+        
+        # --- WATCHDOG LATCH (The Fix) ---
+        # If True, we ignore the paddle until it is toggled OFF and back ON
+        self.paddle_release_required = False
+        # --------------------------------
 
         # ASYNC SCANNER VARIABLES
         self.discovered_mac: Optional[str] = None
@@ -142,11 +146,37 @@ class ControlManager:
     def _watchdog_loop(self):
         logging.info("Paddle Watchdog Started")
         while self.running:
+            
+            # 1. HANDLE MANUAL STOP (Paddle moved to OFF)
             if self.relay_on() and not self.paddle_switch.is_pressed:
                 time.sleep(0.05) 
                 if not self.paddle_switch.is_pressed:
                     logging.info("Watchdog detected paddle OPEN - Stopping shot")
                     self.disable_relay()
+
+            # 2. HANDLE LATCH RESET (Paddle is OFF)
+            # If paddle is OFF, we are allowed to start a new shot next time
+            if not self.paddle_switch.is_pressed:
+                self.paddle_release_required = False
+
+            # 3. HANDLE START (Paddle CLOSED)
+            if not self.relay_on() and self.paddle_switch.is_pressed:
+                
+                # --- FIX: Check Safety Latch ---
+                if self.paddle_release_required:
+                    # Paddle is ON, but we haven't seen it go OFF yet.
+                    # Ignore it (Prevent restart loop).
+                    time.sleep(0.05)
+                    continue
+                # -------------------------------
+
+                time.sleep(0.05) # Debounce
+                if self.paddle_switch.is_pressed:
+                    if not self.relay_on():
+                        logging.info("Watchdog detected paddle CLOSED - Force Starting shot")
+                        self._activity_detected()
+                        self.__start_shot()
+            
             time.sleep(0.05)
 
     def _bg_scan_loop(self):
@@ -220,6 +250,14 @@ class ControlManager:
         if self.relay_on():
             logging.info("disable relay")
             self.relay_off_time = timer()
+            
+            # --- FIX: Engage Safety Latch ---
+            # If the paddle is currently ON when we stop (Auto-Stop), 
+            # we require it to be released before next shot.
+            if self.paddle_switch.is_pressed:
+                self.paddle_release_required = True
+            # --------------------------------
+            
             self.relay.off()
             
             if self.scale_is_connected_flag:
@@ -257,24 +295,27 @@ class ControlManager:
         self.memories.rotate(-1)
 
     def __start_shot(self):
-        if self.relay_on():
+        # Additional safety check against rapid restarts
+        if self.relay_on() or self.paddle_release_required:
             return
             
         logging.info("Start shot")
         self.flow_rate_data = deque([])
         
-        # --- FIX: Priority to Relay (Coffee First) ---
+        # --- LOGIC: Priority to Relay (Coffee First) ---
         self.shot_timer_start = timer()
         self.relay.on()
-        # ---------------------------------------------
         
-        # Then try to Tare (Best Effort)
-        try:
-            if self.tare_button.when_pressed:
-                logging.info("Auto-Taring Scale...")
-                self.tare_button.when_pressed()
-        except Exception as e:
-            logging.error(f"Auto-Tare failed (ignoring to keep shot running): {e}")
+        if self.scale_is_connected_flag:
+            try:
+                if self.tare_button.when_pressed:
+                    logging.info("Scale Connected -> Auto-Taring...")
+                    self.tare_button.when_pressed()
+            except Exception as e:
+                logging.error(f"Auto-Tare failed (Shot continuing): {e}")
+        else:
+            logging.info("Scale Not Connected -> Skipping Tare")
+        # -----------------------------------------------
 
 def try_connect_scale(scale: AcaiaScale, mgr: ControlManager) -> bool:
     try:
@@ -282,7 +323,7 @@ def try_connect_scale(scale: AcaiaScale, mgr: ControlManager) -> bool:
 
         if not mgr.should_scale_connect():
             if scale.connected:
-                logging.debug("Scale connect switch off, disconnecting")
+                logging.info("Scale connect switch detected OFF -> Disconnecting...")
                 scale.disconnect()
             return False
 
@@ -293,7 +334,6 @@ def try_connect_scale(scale: AcaiaScale, mgr: ControlManager) -> bool:
             logging.info("Main Thread connecting to found MAC: %s" % mgr.discovered_mac)
             
             # --- FIX 1: Reset Idle Timer immediately ---
-            # Prevents Auto-Sleep from killing the connection instantly
             mgr._activity_detected() 
             # -------------------------------------------
 
