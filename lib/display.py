@@ -146,7 +146,7 @@ class FlowGraph:
         self.x_pix = width_pixels
         self.avg_flow = avg_flow
         self.grid_step = grid_step
-        self.y_pix_interval = height_pixels / max_value
+        self.y_pix_interval = height_pixels / self.max_value
         if len(flow_data) > 0:
             self.x_pix_interval = width_pixels / len(flow_data)
         else:
