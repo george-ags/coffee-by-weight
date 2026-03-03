@@ -26,6 +26,10 @@ try:
 except Exception as e:
     logging.error(f"Error loading fonts: {e}")
 
+# --- GRAPH CONFIGURATION ---
+Graph_Max_Display_Value = 4
+Graph_Density_Threshold = 6
+
 # --- LOGO CONFIGURATION ---
 IMG_DIR="/opt/lm-bbw/lib/img/"
 
@@ -130,10 +134,11 @@ def calculate_smart_average(data) -> Optional[float]:
 
 # --- CLASS: Flow Graph Renderer ---
 class FlowGraph:
-    def __init__(self, flow_data: list, series_color="BLUE", label_color="#c7c7c7", line_color="#5a5a5a", max_value=5,
+    def __init__(self, flow_data: list, series_color="BLUE", label_color="#c7c7c7", line_color="#5a5a5a", max_value=Graph_Max_Display_Value,
                  width_pixels=240, height_pixels=160, avg_flow=None, grid_step=1):
         self.flow_data = flow_data
-        self.max_value = max_value
+        self.max_value = int(os.environ.get('GRAPH_MAX_VALUE', max_value))
+        self.value_density_threshold = int(os.environ.get('GRAPH_MAX_DENSITY_THRESHOLD', Graph_Density_Threshold))
         self.series_color = series_color
         self.label_color = label_color
         self.line_color = line_color
@@ -175,8 +180,8 @@ class FlowGraph:
             # Draw horizontal line
             self.__draw_y_line(draw, y_pos, color)
 
-            # Draw Labels (Only Even numbers if max_value > 5 to avoid clutter)
-            if v > 0 and v < self.max_value and (self.max_value < 6 or v % 2 == 0):
+            # Draw Labels (Only Even numbers if max_value > MAX_GRAPH_DENSITY_THRESHOLD to avoid clutter)
+            if v > 0 and v < self.max_value and (self.max_value < self.value_density_threshold or v % 2 == 0):
                 draw.text((2, y_pos - 8), str(v), self.label_color, label_font)
 
         draw.line(points, fill=self.series_color, width=2)
@@ -245,7 +250,7 @@ class Display:
         self.data_queue: Queue[DisplayData] = data_queue
         self.display_size = display_size
         self.image_save_dir = image_save_dir
-        self.display_orientation = DisplayOrientation(os.environ.get('DISPLAY_ORIENTATION', DisplayOrientation.PORTRAIT))
+        self.display_orientation = DisplayOrientation(os.environ.get('DISPLAY_ORIENTATION', DisplayOrientation.LANDSCAPE))
         
         self.lcd = None
         self.process = None
