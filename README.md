@@ -105,7 +105,7 @@ rectangular and support 19mm x 13mm opening.
 I found the quality of rocker switches a bit difficult, some had significant bounce leading to them being a bit tricky 
 to use. I bought several kinds and used what worked best. The model I ended up using was `MXU1-2-123`.
 
-#### Button Functionality
+#### Buttons Functionality
 
 | Button | Function |
 |--------|----------|
