@@ -90,7 +90,10 @@ class ControlManager:
         self.paddle_switch = Button(ControlManager.PADDLE_GPIO, pull_up=True, bounce_time=0.05)
         self.paddle_switch.when_pressed = lambda: (self._activity_detected(), self.__start_shot())
         
-        self.tare_button = Button(ControlManager.TARE_GPIO, pull_up=True) 
+        # --- TARE BUTTON (Updated for 5s Long Press) ---
+        self.tare_button = Button(ControlManager.TARE_GPIO, pull_up=True, hold_time=5.0) 
+        self.tare_button.when_held = lambda: self.__restart_service()
+        # -----------------------------------------------
 
         self.memory_button = Button(ControlManager.MEM_GPIO, pull_up=True)
         self.memory_button.when_pressed = lambda: (self._activity_detected(), self.__rotate_memory())
@@ -108,6 +111,12 @@ class ControlManager:
         self.scan_thread = threading.Thread(target=self._bg_scan_loop)
         self.scan_thread.daemon = True
         self.scan_thread.start()
+
+    def __restart_service(self):
+        logging.warning("Tare button held for 5 seconds! Force restarting service...")
+        # Since the service runs as root, we can directly restart it via systemctl
+        # The '&' ensures the command runs in the background so it doesn't block python while killing it
+        os.system("systemctl restart lm-bbw &")
 
     # --- AUTO-SLEEP LOGIC ---
     def _activity_detected(self):
