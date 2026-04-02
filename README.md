@@ -105,6 +105,17 @@ rectangular and support 19mm x 13mm opening.
 I found the quality of rocker switches a bit difficult, some had significant bounce leading to them being a bit tricky 
 to use. I bought several kinds and used what worked best. The model I ended up using was `MXU1-2-123`.
 
+#### Button Functionality
+
+| Button | Function |
+|--------|----------|
+| Tare | Short press: Tare scale. Long press (5s): Restart lm-bbw service |
+| Memory | Rotate memory |
+| Scale Connect | Connect/disconnect scale |
+| Target Inc | Increment target |
+| Target Dec | Decrement target |
+| Paddle | Start/stop shot |
+
 ### Wiring
 
 I bought a crimping tool in order to finish off the connections with standard Dupont 2.54mm connectors for easy
