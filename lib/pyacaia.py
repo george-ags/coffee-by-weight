@@ -401,9 +401,17 @@ class AcaiaScale(object):
         self._stop_event.set()
         
         if self._peripheral:
-            try:
-                self._peripheral.disconnect()
-            except: pass
+            # --- FIX: Non-blocking disconnect to prevent deadlocks ---
+            def _bg_disconnect(peri):
+                try:
+                    peri.disconnect()
+                except Exception:
+                    pass # We don't care if it fails, we're dropping it anyway
+
+            # Fire and forget in a background thread
+            threading.Thread(target=_bg_disconnect, args=(self._peripheral,), daemon=True).start()
+            # ---------------------------------------------------------
+
             self._peripheral = None
 
     def tare(self):
