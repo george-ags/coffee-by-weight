@@ -32,6 +32,6 @@ DISPLAY_BRIGHTNESS=100
 
 # Memory Profile Colors (Hex Codes)
 # Default colors are Red #ff1303, Green #25a602, Blue #376efa
-MEMORY_A_COLOR=#ff1303
-MEMORY_B_COLOR=#25a602
-MEMORY_C_COLOR=#376efa
+MEMORY_A_COLOR=#ff4444
+MEMORY_B_COLOR=#44ff44
+MEMORY_C_COLOR=#4444ff
