@@ -25,3 +25,8 @@ IDLE_TIMEOUT=300
 # After this time, scanning restarts automatically.
 # Set to time which gives the scale plenty of time to turn off.
 SLEEP_PAUSE=360
+
+# Screen Brightness (0 to 100)
+DISPLAY_BRIGHTNESS=100
+
+

@@ -30,6 +30,9 @@ except Exception as e:
 Graph_Max_Display_Value = 4
 Graph_Density_Threshold = 6
 
+# --- SCREEN CONFIGURATION ---
+display_brightness = int(os.environ.get('DISPLAY_BRIGHTNESS', '80'))
+
 # --- LOGO CONFIGURATION ---
 IMG_DIR="/opt/lm-bbw/lib/img/"
 
@@ -331,10 +334,10 @@ class Display:
                 if not screen_is_on:
                     # Restart PWM explicitly when waking up
                     try:
-                        self.lcd._pwm.start(50) 
+                        self.lcd._pwm.start(display_brightness) 
                     except:
                         pass
-                    self.lcd.bl_DutyCycle(50)
+                    self.lcd.bl_DutyCycle(display_brightness)
                     screen_is_on = True
 
                 if data.battery is None:
