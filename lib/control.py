@@ -232,12 +232,29 @@ class ControlManager:
             logging.error("Error persisting memory: %s" % e)
 
     def load_memory(self):
+        # Read colors from env, falling back to the current defaults
+        color_a = os.environ.get('MEMORY_A_COLOR', '#ff1303') # Red
+        color_b = os.environ.get('MEMORY_B_COLOR', '#25a602') # Green
+        color_c = os.environ.get('MEMORY_C_COLOR', '#376efa') # Blue
+
         try:
             with open(memory_save_file, 'rb') as savefile:
                 self.memories = pickle.load(savefile)
+            
+            # --- OVERRIDE SAVED COLORS WITH ENV CONFIG ---
+            # This allows color updates without deleting memory.save
+            for mem in self.memories:
+                if mem.name == "A":
+                    mem.color = color_a
+                elif mem.name == "B":
+                    mem.color = color_b
+                elif mem.name == "C":
+                    mem.color = color_c
+            # ---------------------------------------------
+            
         except Exception as e:
             logging.warn("Not able to load memory from save, resetting memory to defaults. Error was: %s" % e)
-            self.memories = deque([TargetMemory("A"), TargetMemory("B", "#25a602"), TargetMemory("C", "#376efa")])
+            self.memories = deque([TargetMemory("A", color_a), TargetMemory("B", color_b), TargetMemory("C", color_c)])
 
     def add_tare_handler(self, callback: Callable):
         # Modified to trigger activity

@@ -9,6 +9,7 @@ REFRESH_RATE=0.1
 
 # Graph History - Keep 60 seconds of data on screen
 GRAPH_HISTORY_SECONDS=60
+
 # Graph limits
 GRAPH_MAX_VALUE = 4
 GRAPH_MAX_DENSITY_THRESHOLD = 6
@@ -29,4 +30,8 @@ SLEEP_PAUSE=360
 # Screen Brightness (0 to 100)
 DISPLAY_BRIGHTNESS=100
 
-
+# Memory Profile Colors (Hex Codes)
+# Default colors are Red #ff1303, Green #25a602, Blue #376efa
+MEMORY_A_COLOR=#ff1303
+MEMORY_B_COLOR=#25a602
+MEMORY_C_COLOR=#376efa
