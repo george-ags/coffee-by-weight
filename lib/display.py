@@ -31,7 +31,7 @@ Graph_Max_Display_Value = 4
 Graph_Density_Threshold = 6
 
 # --- SCREEN CONFIGURATION ---
-display_brightness = int(os.environ.get('DISPLAY_BRIGHTNESS', '80'))
+display_brightness = int(os.environ.get('DISPLAY_BRIGHTNESS', '100'))
 
 # --- LOGO CONFIGURATION ---
 IMG_DIR="/opt/lm-bbw/lib/img/"
@@ -138,7 +138,7 @@ def calculate_smart_average(data) -> Optional[float]:
 # --- CLASS: Flow Graph Renderer ---
 class FlowGraph:
     def __init__(self, flow_data: list, series_color="BLUE", label_color="#c7c7c7", line_color="#5a5a5a", max_value=Graph_Max_Display_Value,
-                 width_pixels=240, height_pixels=160, avg_flow=None, grid_step=1):
+                 width_pixels=240, height_pixels=160, avg_flow=None, grid_step=1, final_weight=None):
         self.flow_data = flow_data
         self.max_value = int(os.environ.get('GRAPH_MAX_VALUE', max_value))
         self.value_density_threshold = int(os.environ.get('GRAPH_MAX_DENSITY_THRESHOLD', Graph_Density_Threshold))
@@ -148,6 +148,7 @@ class FlowGraph:
         self.y_pix = height_pixels
         self.x_pix = width_pixels
         self.avg_flow = avg_flow
+        self.final_weight = final_weight
         self.grid_step = grid_step
         self.y_pix_interval = height_pixels / self.max_value
         if len(flow_data) > 0:
@@ -189,20 +190,63 @@ class FlowGraph:
 
         draw.line(points, fill=self.series_color, width=2)
 
-        # Logic: If we have a frozen/sticky average, show "avg". Else "g/s"
-        if self.avg_flow is not None:
+        # Logic: If we have a frozen/sticky average AND weight, show them side-by-side
+        if self.avg_flow is not None and self.final_weight is not None:
             display_val = self.avg_flow
-            label = "avg"
+            lbl_top = "avg"
+            lbl_bot = "g/s"
+            
+            fmt_flow = "{:0.1f}".format(display_val)
+            fmt_weight = "{:0.1f}g".format(self.final_weight)
+            
+            w_weight = draw.textlength(fmt_weight, value_font)
+            w_separator = draw.textlength(" | ", label_font)
+            w_flow = draw.textlength(fmt_flow, value_font)
+            
+            # Measure widths to perfectly center the stacked text
+            w_lbl_top = draw.textlength(lbl_top, label_font_sml)
+            w_lbl_bot = draw.textlength(lbl_bot, label_font_sml)
+            w_label_block = max(w_lbl_top, w_lbl_bot)
+            
+            padding_labels = 4 # Small gap between the number and stacked text
+            
+            total_w = w_weight + w_separator + w_flow + padding_labels + w_label_block
+            start_x = self.x_pix - 4 - total_w
+            
+            y_base = (self.y_pix * .25) - value_font.size - 4
+            y_label_base = (self.y_pix * .25) - label_font.size - 4
+            
+            # Draw weight
+            draw.text((start_x, y_base), fmt_weight, fg_color, value_font)
+            curr_x = start_x + w_weight
+            
+            # Draw separator
+            draw.text((curr_x, y_label_base), " | ", fg_color, label_font)
+            curr_x += w_separator
+            
+            # Draw flow
+            draw.text((curr_x, y_base), fmt_flow, fg_color, value_font)
+            curr_x += w_flow + padding_labels
+            
+            # Draw stacked labels (size 12 + size 12 = size 24 value height)
+            # Center the smaller text horizontally over the wider one
+            x_top = curr_x + (w_label_block - w_lbl_top) / 2
+            x_bot = curr_x + (w_label_block - w_lbl_bot) / 2
+            
+            draw.text((x_top, y_base), lbl_top, fg_color, label_font_sml)
+            draw.text((x_bot, y_base + 12), lbl_bot, fg_color, label_font_sml)
+
         else:
             # Fallback to real-time last value
             display_val = self.flow_data[-1] if len(self.flow_data) > 0 else 0
             label = "g/s"
 
-        fmt_flow = "{:0.1f}".format(display_val)
-        w = draw.textlength(fmt_flow, value_font)
-        wl = draw.textlength(label, label_font)
-        draw.text(((self.x_pix - 4 - w - wl), (self.y_pix * .25) - value_font.size - 4), fmt_flow, fg_color, value_font)
-        draw.text(((self.x_pix - wl), (self.y_pix * .25) - label_font.size - 4), label, fg_color, label_font)
+            fmt_flow = "{:0.1f}".format(display_val)
+            w = draw.textlength(fmt_flow, value_font)
+            wl = draw.textlength(label, label_font)
+            draw.text(((self.x_pix - 4 - w - wl), (self.y_pix * .25) - value_font.size - 4), fmt_flow, fg_color, value_font)
+            draw.text(((self.x_pix - wl), (self.y_pix * .25) - label_font.size - 4), label, fg_color, label_font)
+            
         return img
 
     def __draw_y_line(self, draw: ImageDraw, y, color):
@@ -260,6 +304,8 @@ class Display:
         
         self.last_paddle_state = False
         self.frozen_avg = None
+        self.frozen_weight = None
+        self.shot_stop_time = 0.0
 
     def start(self):
         self.process = Process(target=self.__update_display)
@@ -345,22 +391,30 @@ class Display:
                 if data.weight is None:
                     data.weight = 0.0
 
-                # Sticky Average Logic:
+                # Sticky Average & Weight Logic:
                 # 1. Reset if new shot starts (OFF -> ON)
                 if data.paddle_on and not self.last_paddle_state:
                     self.frozen_avg = None
+                    self.frozen_weight = None
+                    self.shot_stop_time = 0.0
                 
-                # 2. Latch Average if shot stops (ON -> OFF)
+                # 2. Latch Average and start drip-out timer if shot stops (ON -> OFF)
                 if not data.paddle_on and self.last_paddle_state:
                     self.frozen_avg = calculate_smart_average(data)
+                    self.shot_stop_time = time.time()
+                
+                # 3. Catch Drip-Out: Keep updating the frozen weight for 3.5s after stop
+                if not data.paddle_on and self.shot_stop_time > 0:
+                    if (time.time() - self.shot_stop_time) <= 3.5:
+                        self.frozen_weight = data.weight
                 
                 self.last_paddle_state = data.paddle_on
                 # ---------------------------------
 
                 w, h = (self.lcd.width, self.lcd.height) if self.display_orientation == DisplayOrientation.PORTRAIT else (self.lcd.height, self.lcd.width)
                 
-                # Pass frozen_avg to draw_frame
-                img = draw_frame(w, h, data, self.display_orientation, self.frozen_avg)
+                # Pass frozen_avg and frozen_weight to draw_frame
+                img = draw_frame(w, h, data, self.display_orientation, self.frozen_avg, self.frozen_weight)
 
                 if data.save_image and img is not None:
                     self.save_image(img)
@@ -390,7 +444,7 @@ class Display:
                 time.sleep(1)
 
 
-def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayOrientation, frozen_avg: float = None) -> Image:
+def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayOrientation, frozen_avg: float = None, frozen_weight: float = None) -> Image:
     # --- 1. CONFIGURATION ---
     is_landscape = (orientation == DisplayOrientation.LANDSCAPE)
     
@@ -537,10 +591,11 @@ def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayO
         
         # Determine average value: Prefer sticky frozen val, else calculate on fly (rare)
         final_avg_val = frozen_avg
+        final_weight_val = frozen_weight
 
         if is_landscape:
             g_w, g_h = 320, 145 
-            flow_image = FlowGraph(flow_rate_data, data.memory.color, width_pixels=g_w, height_pixels=g_h, avg_flow=final_avg_val).generate_graph()
+            flow_image = FlowGraph(flow_rate_data, data.memory.color, width_pixels=g_w, height_pixels=g_h, avg_flow=final_avg_val, final_weight=final_weight_val).generate_graph()
             img.paste(flow_image, (0, header_h))
             
             # Draw Time Axis Labels (bottom of graph area)
@@ -555,7 +610,7 @@ def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayO
             timer_y = 262
             timer_font = label_font
             
-            flow_image = FlowGraph(flow_rate_data, data.memory.color, width_pixels=g_w, height_pixels=g_h, avg_flow=final_avg_val).generate_graph()
+            flow_image = FlowGraph(flow_rate_data, data.memory.color, width_pixels=g_w, height_pixels=g_h, avg_flow=final_avg_val, final_weight=final_weight_val).generate_graph()
             img.paste(flow_image, (0, graph_y))
             
             last_sample_time = data.sample_rate * float(len(data.flow_data))
