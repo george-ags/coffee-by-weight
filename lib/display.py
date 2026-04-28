@@ -37,18 +37,25 @@ display_brightness = int(os.environ.get('DISPLAY_BRIGHTNESS', '100'))
 IMG_DIR="/opt/lm-bbw/lib/img/"
 
 logo_img = None
+coffee_cup_img = None
 
 try:
     logo_path = IMG_DIR + "lamarzocco.png"
     if os.path.exists(logo_path):
         raw_img = Image.open(logo_path).convert("RGBA")
-
         resize_factor = 0.7
-        new_w = int(raw_img.width * resize_factor)
-        new_h = int(raw_img.height * resize_factor)
-        logo_img = raw_img.resize((new_w, new_h))
+        logo_img = raw_img.resize((int(raw_img.width * resize_factor), int(raw_img.height * resize_factor)))
+
+    # Load Coffee Cup Icon
+    cup_path = IMG_DIR + "coffee-cup.png"
+    if os.path.exists(cup_path):
+        raw_cup_img = Image.open(cup_path).convert("RGBA")
+        # Resize cup to match the main value font height (24px)
+        cup_h = 24
+        cup_w = int(cup_h * (raw_cup_img.width / raw_cup_img.height))
+        coffee_cup_img = raw_cup_img.resize((cup_w, cup_h))
 except Exception as e:
-    logging.error(f"Error loading logo: {e}")
+    logging.error(f"Error loading images: {e}")
 
 # --- COLORS ---
 bg_color = "BLACK"
@@ -191,6 +198,7 @@ class FlowGraph:
         draw.line(points, fill=self.series_color, width=2)
 
         # Logic: If we have a frozen/sticky average AND weight, show them side-by-side
+        # Logic: If we have a frozen/sticky average AND weight, show them side-by-side
         if self.avg_flow is not None and self.final_weight is not None:
             display_val = self.avg_flow
             lbl_top = "avg"
@@ -210,34 +218,45 @@ class FlowGraph:
             
             padding_labels = 4 # Small gap between the number and stacked text
             
-            total_w = w_weight + w_separator + w_flow + padding_labels + w_label_block
+            # Space needed for cup image + a small padding gap
+            w_cup = coffee_cup_img.width + 6 if coffee_cup_img else 0
+            
+            total_w = w_cup + w_weight + w_separator + w_flow + padding_labels + w_label_block
             start_x = self.x_pix - 4 - total_w
             
             y_base = (self.y_pix * .25) - value_font.size - 4
             y_label_base = (self.y_pix * .25) - label_font.size - 4
             
-            # Draw weight
-            draw.text((start_x, y_base), fmt_weight, fg_color, value_font)
-            curr_x = start_x + w_weight
+            curr_x = start_x
             
+            # Draw Cup Image
+            if coffee_cup_img:
+                # Center cup vertically with text
+                cup_y = int(y_base + (value_font.size - coffee_cup_img.height) / 2) + 2
+                img.paste(coffee_cup_img, (int(curr_x), cup_y), coffee_cup_img)
+                curr_x += w_cup
+
+            # Draw weight
+            draw.text((curr_x, y_base), fmt_weight, fg_color, value_font)
+            curr_x += w_weight
+
             # Draw separator
             draw.text((curr_x, y_label_base), " | ", fg_color, label_font)
             curr_x += w_separator
-            
+
             # Draw flow
             draw.text((curr_x, y_base), fmt_flow, fg_color, value_font)
             curr_x += w_flow + padding_labels
-            
+
             # Draw stacked labels (size 12 + size 12 = size 24 value height)
-            # Center the smaller text horizontally over the wider one
             x_top = curr_x + (w_label_block - w_lbl_top) / 2
             x_bot = curr_x + (w_label_block - w_lbl_bot) / 2
-            
+
             draw.text((x_top, y_base), lbl_top, fg_color, label_font_sml)
             draw.text((x_bot, y_base + 12), lbl_bot, fg_color, label_font_sml)
 
         else:
-            # Fallback to real-time last value
+            # Fallback to real-time last value (This runs DURING the shot)
             display_val = self.flow_data[-1] if len(self.flow_data) > 0 else 0
             label = "g/s"
 
