@@ -10,6 +10,9 @@ REFRESH_RATE=0.1
 # Graph History - Keep 60 seconds of data on screen
 GRAPH_HISTORY_SECONDS=60
 
+# Drip-out window: time (seconds) to continue tracking the weight after brewing stops
+DRIP_OUT_WINDOW=2.5
+
 # Graph limits
 GRAPH_MAX_VALUE = 4
 GRAPH_MAX_DENSITY_THRESHOLD = 6

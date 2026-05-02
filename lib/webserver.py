@@ -10,6 +10,25 @@ import threading
 # Pointing to the systemd environment file
 ENV_FILE_PATH = '/etc/default/lm-bbw'
 
+# Master list of all editable configuration keys and their defaults.
+# This ensures they always appear in the Web UI, even if they aren't written in the env file yet.
+KNOWN_CONFIG_KEYS = {
+    'LOGLEVEL': 'INFO',
+    'DISPLAY_ORIENTATION': 'landscape',
+    'REFRESH_RATE': '0.1',
+    'GRAPH_HISTORY_SECONDS': '60',
+    'GRAPH_MAX_VALUE': '4',
+    'GRAPH_MAX_DENSITY_THRESHOLD': '6',
+    'FLOW_SMOOTHING_FACTOR': '30',
+    'IDLE_TIMEOUT': '300',
+    'SLEEP_PAUSE': '360',
+    'DISPLAY_BRIGHTNESS': '100',
+    'MEMORY_A_COLOR': '#ff1303',
+    'MEMORY_B_COLOR': '#25a602',
+    'MEMORY_C_COLOR': '#376efa',
+    'DRIP_OUT_WINDOW': '3.5'
+}
+
 class GalleryHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
     """
     Custom handler that displays an image gallery and a configuration editor.
@@ -60,8 +79,10 @@ class GalleryHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
         enc = sys.getfilesystemencoding()
         title = 'Configuration Settings'
         
-        # Read current config to populate form
-        config_items = []
+        # Pre-populate with all known keys
+        config_dict = KNOWN_CONFIG_KEYS.copy()
+        
+        # Override with whatever is currently stored in the file
         try:
             if os.path.exists(ENV_FILE_PATH):
                 with open(ENV_FILE_PATH, 'r') as f:
@@ -70,9 +91,12 @@ class GalleryHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
                         # Only grab lines that look like key=value and aren't commented out
                         if line and not line.startswith('#') and '=' in line:
                             k, v = line.split('=', 1)
-                            config_items.append((k.strip(), v.strip()))
+                            config_dict[k.strip()] = v.strip()
         except Exception as e:
             print(f"Error reading config: {e}")
+
+        # Convert back to list for HTML drawing
+        config_items = list(config_dict.items())
 
         # Build HTML
         r = []

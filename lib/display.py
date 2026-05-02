@@ -29,6 +29,7 @@ except Exception as e:
 # --- GRAPH CONFIGURATION ---
 Graph_Max_Display_Value = 4
 Graph_Density_Threshold = 6
+Drip_Out_Window = float(os.environ.get('DRIP_OUT_WINDOW', '3.5'))
 
 # --- SCREEN CONFIGURATION ---
 display_brightness = int(os.environ.get('DISPLAY_BRIGHTNESS', '100'))
@@ -40,20 +41,24 @@ logo_img = None
 coffee_cup_img = None
 
 try:
+    # Load Main Logo
     logo_path = IMG_DIR + "lamarzocco.png"
     if os.path.exists(logo_path):
         raw_img = Image.open(logo_path).convert("RGBA")
         resize_factor = 0.7
-        logo_img = raw_img.resize((int(raw_img.width * resize_factor), int(raw_img.height * resize_factor)))
-
+        new_w = int(raw_img.width * resize_factor)
+        new_h = int(raw_img.height * resize_factor)
+        logo_img = raw_img.resize((new_w, new_h))
+        
     # Load Coffee Cup Icon
     cup_path = IMG_DIR + "coffee-cup.png"
     if os.path.exists(cup_path):
         raw_cup_img = Image.open(cup_path).convert("RGBA")
-        # Resize cup to match the main value font height (24px)
+        # Resize cup to perfectly match the main value font height (24px)
         cup_h = 24
         cup_w = int(cup_h * (raw_cup_img.width / raw_cup_img.height))
         coffee_cup_img = raw_cup_img.resize((cup_w, cup_h))
+        
 except Exception as e:
     logging.error(f"Error loading images: {e}")
 
@@ -110,20 +115,23 @@ def draw_paddle_switch(draw, xy, is_on, color, scale=1.0):
     knob_y = y + padding
     draw.ellipse((knob_x, knob_y, knob_x + knob_dia, knob_y + knob_dia), fill=knob_color, outline=fg_color, width=1)
 
-# --- HELPER: Calculate Smart Average ---
-def calculate_smart_average(data) -> Optional[float]:
+# --- FIX: HELPER Calculate Smart Average ---
+def calculate_smart_average(data) -> float:
     """
     Calculates average flow from the first drop (>0.2g/s) until the end.
+    Falls back to simple average if calculation fails to ensure summary always displays.
     """
     if data.shot_time_elapsed <= 0:
-        return None
+        return 0.0
         
     start_index = 0
     threshold = 0.2
     
-    # Convert deque to list for indexing
     raw_flow = list(data.flow_data)
     
+    if not raw_flow:
+        return data.weight / data.shot_time_elapsed
+        
     # Find start of flow
     for i, val in enumerate(raw_flow):
         if val > threshold:
@@ -134,13 +142,12 @@ def calculate_smart_average(data) -> Optional[float]:
     active_samples = total_samples - start_index
     
     if active_samples > 0:
-        # Effective Time = Total Time * (Active Samples / Total Samples)
         effective_duration = data.shot_time_elapsed * (active_samples / total_samples)
-        
         if effective_duration > 0.5:
             return data.weight / effective_duration
             
-    return None
+    # Fallback to simple average
+    return data.weight / data.shot_time_elapsed
 
 # --- CLASS: Flow Graph Renderer ---
 class FlowGraph:
@@ -198,7 +205,6 @@ class FlowGraph:
         draw.line(points, fill=self.series_color, width=2)
 
         # Logic: If we have a frozen/sticky average AND weight, show them side-by-side
-        # Logic: If we have a frozen/sticky average AND weight, show them side-by-side
         if self.avg_flow is not None and self.final_weight is not None:
             display_val = self.avg_flow
             lbl_top = "avg"
@@ -231,7 +237,6 @@ class FlowGraph:
             
             # Draw Cup Image
             if coffee_cup_img:
-                # Center cup vertically with text
                 cup_y = int(y_base + (value_font.size - coffee_cup_img.height) / 2) + 2
                 img.paste(coffee_cup_img, (int(curr_x), cup_y), coffee_cup_img)
                 curr_x += w_cup
@@ -239,24 +244,24 @@ class FlowGraph:
             # Draw weight
             draw.text((curr_x, y_base), fmt_weight, fg_color, value_font)
             curr_x += w_weight
-
+            
             # Draw separator
             draw.text((curr_x, y_label_base), " | ", fg_color, label_font)
             curr_x += w_separator
-
+            
             # Draw flow
             draw.text((curr_x, y_base), fmt_flow, fg_color, value_font)
             curr_x += w_flow + padding_labels
-
+            
             # Draw stacked labels (size 12 + size 12 = size 24 value height)
             x_top = curr_x + (w_label_block - w_lbl_top) / 2
             x_bot = curr_x + (w_label_block - w_lbl_bot) / 2
-
+            
             draw.text((x_top, y_base), lbl_top, fg_color, label_font_sml)
             draw.text((x_bot, y_base + 12), lbl_bot, fg_color, label_font_sml)
 
         else:
-            # Fallback to real-time last value (This runs DURING the shot)
+            # Fallback to real-time last value
             display_val = self.flow_data[-1] if len(self.flow_data) > 0 else 0
             label = "g/s"
 
@@ -325,6 +330,11 @@ class Display:
         self.frozen_avg = None
         self.frozen_weight = None
         self.shot_stop_time = 0.0
+        self.drip_out_locked = True
+        
+        # --- End-to-End Tracking ---
+        self.first_drop_time = None
+        self.shot_duration = 0.0
 
     def start(self):
         self.process = Process(target=self.__update_display)
@@ -356,6 +366,18 @@ class Display:
             img.save(absolute_path)
         except Exception as ex:
             logging.error("Failed to save image: %s", str(ex))
+            
+    def _compute_avg(self, weight: float) -> float:
+        """ Calculates accurate average completely independent of Graph History limit """
+        if self.shot_duration <= 0:
+            return 0.0
+            
+        if self.first_drop_time is not None and self.first_drop_time < self.shot_duration:
+            effective_duration = self.shot_duration - self.first_drop_time
+            if effective_duration > 0.5:
+                return weight / effective_duration
+                
+        return weight / self.shot_duration
 
     def __update_display(self):
         # Hardware init
@@ -392,12 +414,10 @@ class Display:
 
         while True:
             try:
-                # Wait for data for 2 seconds. If none comes, raise Empty exception.
                 data = self.data_queue.get(timeout=2.0)
                 
                 # Wake Logic
                 if not screen_is_on:
-                    # Restart PWM explicitly when waking up
                     try:
                         self.lcd._pwm.start(display_brightness) 
                     except:
@@ -410,30 +430,51 @@ class Display:
                 if data.weight is None:
                     data.weight = 0.0
 
-                # Sticky Average & Weight Logic:
                 # 1. Reset if new shot starts (OFF -> ON)
                 if data.paddle_on and not self.last_paddle_state:
                     self.frozen_avg = None
                     self.frozen_weight = None
                     self.shot_stop_time = 0.0
+                    self.drip_out_locked = True
+                    self.first_drop_time = None
+                    self.shot_duration = 0.0
+                
+                # 1.5 Track end-to-end timing metrics while paddle is ON
+                if data.paddle_on:
+                    self.shot_duration = data.shot_time_elapsed
+                    # Log the exact time the first solid drop hits the cup
+                    if self.first_drop_time is None and len(data.flow_data) > 0 and data.flow_data[-1] > 0.2:
+                        self.first_drop_time = data.shot_time_elapsed
                 
                 # 2. Latch Average and start drip-out timer if shot stops (ON -> OFF)
                 if not data.paddle_on and self.last_paddle_state:
-                    self.frozen_avg = calculate_smart_average(data)
                     self.shot_stop_time = time.time()
+                    
+                    # --- FIX: Average is computed right now and NEVER updated again ---
+                    self.frozen_avg = self._compute_avg(data.weight)
+                    
+                    self.frozen_weight = data.weight
+                    self.drip_out_locked = False
                 
-                # 3. Catch Drip-Out: Keep updating the frozen weight for 3.5s after stop
-                if not data.paddle_on and self.shot_stop_time > 0:
-                    if (time.time() - self.shot_stop_time) <= 3.5:
+                # 3. Catch Drip-Out (Safeguarded by lock)
+                if not data.paddle_on and not self.drip_out_locked:
+                    if (time.time() - self.shot_stop_time) <= Drip_Out_Window:
+                        # --- FIX: Only the weight is updated here ---
                         self.frozen_weight = data.weight
+                    else:
+                        self.drip_out_locked = True
                 
                 self.last_paddle_state = data.paddle_on
                 # ---------------------------------
 
                 w, h = (self.lcd.width, self.lcd.height) if self.display_orientation == DisplayOrientation.PORTRAIT else (self.lcd.height, self.lcd.width)
                 
-                # Pass frozen_avg and frozen_weight to draw_frame
-                img = draw_frame(w, h, data, self.display_orientation, self.frozen_avg, self.frozen_weight)
+                # Hide summary line during drip-out (Only pass to renderer if lock has fully engaged)
+                display_avg = self.frozen_avg if self.drip_out_locked else None
+                display_weight = self.frozen_weight if self.drip_out_locked else None
+
+                # Pass logic to draw_frame
+                img = draw_frame(w, h, data, self.display_orientation, display_avg, display_weight)
 
                 if data.save_image and img is not None:
                     self.save_image(img)
@@ -442,14 +483,11 @@ class Display:
             except Empty:
                 # Sleep Logic
                 if screen_is_on:
-                    # Kill PWM completely to prevent faint glow
                     try:
                         self.lcd.bl_DutyCycle(0)
                         self.lcd._pwm.stop() 
                     except:
                         pass
-                    
-                    # Force Draw BLACK to wipe video memory
                     w, h = (self.lcd.width, self.lcd.height) if self.display_orientation == DisplayOrientation.PORTRAIT else (self.lcd.height, self.lcd.width)
                     black_img = Image.new("RGBA", (w, h), "BLACK")
                     self.lcd.ShowImage(black_img, 0, 0)
@@ -581,11 +619,9 @@ def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayO
         batt_text_x = batt_icon_x - 4 - w_batt_text
         
         draw_battery(draw, (batt_icon_x, 296), data.battery, scale=1.0)
-        #draw.text((batt_text_x, 294), fmt_batt, fg_color, label_font)
         
         # Left Side: Paddle
         draw_paddle_switch(draw, (8, 294), data.paddle_on, color=p_color, scale=1.0)
-        #draw.text((50, 294), p_text, p_color, label_font)
         
         # Center: Logo (Optional support for portrait)
         if logo_img is not None:
