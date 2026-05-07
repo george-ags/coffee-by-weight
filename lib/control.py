@@ -17,6 +17,7 @@ from lib.pyacaia import AcaiaScale
 
 default_target = 36.0
 default_overshoot = 1.0
+valid_overshoot_threshold = 5
 memory_save_file = "memory.save"
 
 class TargetMemory:
@@ -31,12 +32,11 @@ class TargetMemory:
 
     def update_overshoot(self, weight: float):
         new_overshoot = self.overshoot + (weight - self.target)
-        if new_overshoot > 10 or new_overshoot < -10:
-            logging.error("New overshoot out of safe range, ignoring")
+        if abs(new_overshoot) > valid_overshoot_threshold:
+            logging.error("New overshoot %.2f out of safe range, ignoring" % new_overshoot)
         else:
             self.overshoot = new_overshoot
-            logging.debug("set new overshoot to %.2f" % self.overshoot)
-
+            logging.debug("Set new overshoot to %.2f" % self.overshoot)
 
 class ControlManager:
     TARE_GPIO = 4
