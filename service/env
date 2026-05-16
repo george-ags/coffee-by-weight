@@ -11,7 +11,7 @@ REFRESH_RATE=0.1
 GRAPH_HISTORY_SECONDS=60
 
 # Drip-out window: time (seconds) to continue tracking the weight after brewing stops
-DRIP_OUT_WINDOW=2.5
+DRIP_OUT_WINDOW=3.5
 
 # Graph limits
 GRAPH_MAX_VALUE = 4
@@ -34,7 +34,7 @@ SLEEP_PAUSE=360
 DISPLAY_BRIGHTNESS=100
 
 # Memory Profile Colors (Hex Codes)
-# Default colors are Red #ff1303, Green #25a602, Blue #376efa
-MEMORY_A_COLOR=#ff0070
+# Default colors are Red #ff0000, Green #25a602, Blue #376efa
+MEMORY_A_COLOR=#ff0000
 MEMORY_B_COLOR=#00ff70
 MEMORY_C_COLOR=#0070ff

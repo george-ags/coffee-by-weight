@@ -233,9 +233,9 @@ class ControlManager:
 
     def load_memory(self):
         # Read colors from env, falling back to the current defaults
-        color_a = os.environ.get('MEMORY_A_COLOR', '#ff1303') # Red
-        color_b = os.environ.get('MEMORY_B_COLOR', '#25a602') # Green
-        color_c = os.environ.get('MEMORY_C_COLOR', '#376efa') # Blue
+        color_a = os.environ.get('MEMORY_A_COLOR', '#ff0000') # Red
+        color_b = os.environ.get('MEMORY_B_COLOR', '#00ff00') # Green
+        color_c = os.environ.get('MEMORY_C_COLOR', '#0000ff') # Blue
 
         try:
             with open(memory_save_file, 'rb') as savefile:
