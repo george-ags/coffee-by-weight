@@ -88,14 +88,20 @@ def update_overshoot(scale: AcaiaScale, mgr: ControlManager):
     logging.info("new overshoot on memory %s is %.2f" %(mgr.current_memory().name, mgr.current_memory().overshoot))
 
 
+SHOT_TIMEOUT_SECONDS = 60.0
+
 def check_target_disable_relay(scale: AcaiaScale, mgr: ControlManager):
     if mgr.shot_time_elapsed() < 1.5:
         return
 
     if mgr.relay_on() and scale.weight > mgr.current_memory().target_minus_overshoot():
-        mgr.disable_relay()
-        overshoot_update_executor.submit(update_overshoot, scale, mgr)
-        logging.debug("Scheduling overshoot check and update")
+        if mgr.shot_time_elapsed() >= SHOT_TIMEOUT_SECONDS:
+            logging.info("Shot reached 60s timeout - disabling relay, skipping memory update")
+            mgr.disable_relay()
+        else:
+            mgr.disable_relay()
+            overshoot_update_executor.submit(update_overshoot, scale, mgr)
+            logging.debug("Scheduling overshoot check and update")
 
 
 def main():
@@ -155,11 +161,18 @@ def main():
                 mgr.disable_relay()
             else:
                 pass 
-        
+
+        # Detect timeout: shot has been brewing for 60s or more
+        timeout_stop = mgr.shot_time_elapsed() >= SHOT_TIMEOUT_SECONDS
+
+        # Suppress image save if this is a timeout shot
+        if timeout_stop:
+            mgr.image_needs_save = False
+
         last_relay_state = relay_is_on
 
         if scale is not None and scale.connected:
-            (last_sample_time, last_weight) = update_display(scale, mgr, display, last_sample_time, last_weight)
+            (last_sample_time, last_weight) = update_display(scale, mgr, display, last_sample_time, last_weight, timeout_stop)
         else:
             display.display_off()
             # Reset timing variables on disconnect
@@ -178,7 +191,7 @@ def main():
     logging.info("Exiting on stop")
 
 
-def update_display(scale: AcaiaScale, mgr: ControlManager, display: Display, last_time: float, last_weight: float) -> (float, float):
+def update_display(scale: AcaiaScale, mgr: ControlManager, display: Display, last_time: float, last_weight: float, timeout_stop: bool = False) -> (float, float):
     now = timer()
     weight = scale.weight
     sample_rate = 0.0
@@ -189,7 +202,7 @@ def update_display(scale: AcaiaScale, mgr: ControlManager, display: Display, las
         mgr.add_flow_rate_data(g_per_s)
     data = DisplayData(weight, sample_rate, mgr.current_memory(), mgr.flow_rate_data,
                        scale.battery, mgr.relay_on(), mgr.shot_time_elapsed(),
-                       mgr.image_needs_save, smoothing)
+                       mgr.image_needs_save, smoothing, timeout_stop=timeout_stop)
     display.display_on()
     display.put_data(data)
     mgr.image_needs_save = False

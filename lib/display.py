@@ -39,6 +39,7 @@ IMG_DIR="/opt/lm-bbw/lib/img/"
 
 logo_img = None
 coffee_cup_img = None
+warning_img = None
 
 try:
     # Load Main Logo
@@ -58,7 +59,13 @@ try:
         cup_h = 24
         cup_w = int(cup_h * (raw_cup_img.width / raw_cup_img.height))
         coffee_cup_img = raw_cup_img.resize((cup_w, cup_h))
-        
+
+    # Load Warning Icon (shown when shot is stopped by timeout)
+    warn_path = IMG_DIR + "warning.png"
+    if os.path.exists(warn_path):
+        raw_warn_img = Image.open(warn_path).convert("RGBA")
+        warning_img = raw_warn_img.resize((100, 100))
+
 except Exception as e:
     logging.error(f"Error loading images: {e}")
 
@@ -281,7 +288,7 @@ class FlowGraph:
 class DisplayData:
     def __init__(self, weight: float, sample_rate: float, memory, flow_data: list, battery: int,
                  paddle_on: bool, shot_time_elapsed: float, save_image: bool = False,
-                 flow_smooth_factor: int = 10):
+                 flow_smooth_factor: int = 10, timeout_stop: bool = False):
         self.weight = weight
         self.sample_rate = sample_rate
         self.memory = memory
@@ -291,6 +298,7 @@ class DisplayData:
         self.shot_time_elapsed = shot_time_elapsed
         self.save_image = save_image
         self.flow_smooth_factor = flow_smooth_factor
+        self.timeout_stop = timeout_stop
 
     def flow_rate_moving_avg(self) -> list:
         flow_data_series = pd.Series(self.flow_data)
@@ -335,6 +343,11 @@ class Display:
         # --- End-to-End Tracking ---
         self.first_drop_time = None
         self.shot_duration = 0.0
+
+        # --- Timeout-Stop Warning ---
+        self.show_warning = False
+        self.warn_flash_state = False
+        self.warn_flash_time = 0.0
 
     def start(self):
         self.process = Process(target=self.__update_display)
@@ -438,6 +451,9 @@ class Display:
                     self.drip_out_locked = True
                     self.first_drop_time = None
                     self.shot_duration = 0.0
+                    self.show_warning = False
+                    self.warn_flash_state = False
+                    self.warn_flash_time = 0.0
                 
                 # 1.5 Track end-to-end timing metrics while paddle is ON
                 if data.paddle_on:
@@ -463,6 +479,19 @@ class Display:
                         self.frozen_weight = data.weight
                     else:
                         self.drip_out_locked = True
+
+                # 4. Activate timeout-stop warning
+                if data.timeout_stop and not self.show_warning:
+                    self.show_warning = True
+                    self.warn_flash_state = True
+                    self.warn_flash_time = time.time()
+
+                # 5. Update flash state (toggle every 0.5s)
+                if self.show_warning:
+                    now_t = time.time()
+                    if (now_t - self.warn_flash_time) >= 0.5:
+                        self.warn_flash_state = not self.warn_flash_state
+                        self.warn_flash_time = now_t
                 
                 self.last_paddle_state = data.paddle_on
                 # ---------------------------------
@@ -470,11 +499,13 @@ class Display:
                 w, h = (self.lcd.width, self.lcd.height) if self.display_orientation == DisplayOrientation.PORTRAIT else (self.lcd.height, self.lcd.width)
                 
                 # Hide summary line during drip-out (Only pass to renderer if lock has fully engaged)
-                display_avg = self.frozen_avg if self.drip_out_locked else None
-                display_weight = self.frozen_weight if self.drip_out_locked else None
+                # Also hide if this is a timeout shot - data is not meaningful
+                display_avg = self.frozen_avg if (self.drip_out_locked and not data.timeout_stop) else None
+                display_weight = self.frozen_weight if (self.drip_out_locked and not data.timeout_stop) else None
 
                 # Pass logic to draw_frame
-                img = draw_frame(w, h, data, self.display_orientation, display_avg, display_weight)
+                img = draw_frame(w, h, data, self.display_orientation, display_avg, display_weight,
+                                 self.show_warning and self.warn_flash_state)
 
                 if data.save_image and img is not None:
                     self.save_image(img)
@@ -501,7 +532,7 @@ class Display:
                 time.sleep(1)
 
 
-def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayOrientation, frozen_avg: float = None, frozen_weight: float = None) -> Image:
+def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayOrientation, frozen_avg: float = None, frozen_weight: float = None, show_warning: bool = False) -> Image:
     # --- 1. CONFIGURATION ---
     is_landscape = (orientation == DisplayOrientation.LANDSCAPE)
     
@@ -676,5 +707,16 @@ def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayO
             fmt_shot_time = "timer:{:0.1f}s".format(data.shot_time_elapsed)
             w = draw.textlength(fmt_shot_time, timer_font)
             draw.text(((width - w) / 2, timer_y), fmt_shot_time, fg_color, timer_font)
+
+    # --- 7. TIMEOUT-STOP WARNING OVERLAY ---
+    if show_warning and warning_img is not None:
+        # Centre the 50x50 icon inside the graph band
+        if is_landscape:
+            graph_center_y = graph_y + (145 // 2)
+        else:
+            graph_center_y = graph_y + (160 // 2)
+        warn_x = (width - warning_img.width) // 2
+        warn_y = graph_center_y - warning_img.height // 2
+        img.paste(warning_img, (warn_x, warn_y), warning_img)
 
     return img
