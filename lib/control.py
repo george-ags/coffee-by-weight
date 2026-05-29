@@ -154,12 +154,22 @@ class ControlManager:
 
     def _watchdog_loop(self):
         logging.info("Paddle Watchdog Started")
+
+        OPEN_CONFIRM_READS = 4      # consecutive open reads needed to stop
+        OPEN_READ_INTERVAL = 0.04   # ~160 ms total confirmation window
+
         while self.running:
-            
+
             # 1. HANDLE MANUAL STOP (Paddle moved to OFF)
             if self.relay_on() and not self.paddle_switch.is_pressed:
-                time.sleep(0.05) 
-                if not self.paddle_switch.is_pressed:
+                confirmed_open = True
+                for _ in range(OPEN_CONFIRM_READS - 1):
+                    time.sleep(OPEN_READ_INTERVAL)
+                    if self.paddle_switch.is_pressed:
+                        confirmed_open = False   # glitch — paddle came back
+                        break
+                # re-check relay too, in case target-stop already ran
+                if confirmed_open and self.relay_on() and not self.paddle_switch.is_pressed:
                     logging.info("Watchdog detected paddle OPEN - Stopping shot")
                     self.disable_relay()
 
