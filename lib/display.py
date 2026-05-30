@@ -689,15 +689,15 @@ def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayO
     
     # Column 2: Target
     target_label = memory_label(data.memory.name)
-    # If a custom name is too wide, drop to the smaller font so it can't overflow
-    # into the next column. The label starts at lbl_x_2; column 3 begins at
-    # col_w*2 (landscape) or the screen edge (portrait, where there are 2 cols).
-    next_col_x = (col_w * 2) if is_landscape else width
-    label_max_w = next_col_x - lbl_x_2 - 4
+    # Drop to the smaller font if the name is too wide for the column so it
+    # can't overflow into the next column.
+    label_max_w = col_w - 8
     lbl_font = label_font
     if draw.textlength(target_label, lbl_font) > label_max_w:
         lbl_font = label_font_sml
-    draw.text((lbl_x_2, lbl_y), target_label, data.memory.color, lbl_font)
+    # Center the label within column 2 (spans col_w .. col_w*2).
+    w_label = draw.textlength(target_label, lbl_font)
+    draw.text(((col_w - w_label) / 2 + col_w, lbl_y), target_label, data.memory.color, lbl_font)
     fmt_target = "{:0.1f}".format(data.memory.target)
     # Use same font size for target
     w = draw.textlength(fmt_target, header_val_font)
