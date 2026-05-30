@@ -2,7 +2,6 @@ import logging
 import math
 import os
 import time
-import sys
 import traceback
 import pandas as pd
 from datetime import datetime
@@ -24,7 +23,13 @@ try:
     value_font_lg = ImageFont.truetype("lib/font/Quicksand-Regular.ttf", 36)
     value_font_lg_bold = ImageFont.truetype("lib/font/Quicksand-Bold.ttf", 36)
 except Exception as e:
-    logging.error(f"Error loading fonts: {e}")
+    # If the font files are missing, fall back to PIL's built-in font so the
+    # display degrades gracefully instead of crashing later with NameError on
+    # the first draw.text() call.
+    logging.error(f"Error loading fonts, falling back to default: {e}")
+    _default = ImageFont.load_default()
+    label_font = label_font_sml = label_font_mid = label_font_lg = _default
+    value_font = value_font_med = value_font_lg = value_font_lg_bold = _default
 
 # --- GRAPH CONFIGURATION ---
 Graph_Max_Display_Value = 4
@@ -379,6 +384,11 @@ class Display:
         self.warn_flash_state = False
         self.warn_flash_time = 0.0
 
+        # --- Render gating ---
+        # Signature of the last frame actually drawn. When idle, identical
+        # frames are skipped so we don't redraw 10x/sec and peg the CPU.
+        self.last_render_sig = None
+
     def start(self):
         self.process = Process(target=self.__update_display)
         self.process.start()
@@ -458,8 +468,28 @@ class Display:
         while True:
             try:
                 data = self.data_queue.get(timeout=2.0)
-                
+
+                # --- DRAIN STALE FRAMES ---
+                # The producer pushes at the main-loop rate (~10 Hz). If a render
+                # (PIL draw + SPI push) takes longer than that interval, frames
+                # pile up and every update — including button presses — shows up
+                # seconds late. Discard everything queued behind us and keep only
+                # the newest frame so the screen always reflects current state.
+                # The "save this shot image" flag rides on a single frame, so we
+                # carry it forward onto the frame we actually render rather than
+                # dropping it with the stale frames.
+                pending_save = data.save_image
+                while True:
+                    try:
+                        data = self.data_queue.get_nowait()
+                        pending_save = pending_save or data.save_image
+                    except Empty:
+                        break
+                data.save_image = pending_save
+                # --------------------------
+
                 # Wake Logic
+                just_woke = False
                 if not screen_is_on:
                     try:
                         self.lcd._pwm.start(display_brightness) 
@@ -467,6 +497,7 @@ class Display:
                         pass
                     self.lcd.bl_DutyCycle(display_brightness)
                     screen_is_on = True
+                    just_woke = True
 
                 if data.battery is None:
                     data.battery = 0
@@ -533,13 +564,39 @@ class Display:
                 display_avg = self.frozen_avg if (self.drip_out_locked and not data.timeout_stop) else None
                 display_weight = self.frozen_weight if (self.drip_out_locked and not data.timeout_stop) else None
 
-                # Pass logic to draw_frame
-                img = draw_frame(w, h, data, self.display_orientation, display_avg, display_weight,
-                                 self.show_warning and self.warn_flash_state)
+                # --- RENDER GATING ---
+                # The state machine above runs every cycle, but the expensive part
+                # (draw_frame + SPI push) only needs to happen when the picture
+                # actually changes. Two cases force a render:
+                #   1. "animating" — paddle on (live weight/timer/graph), the
+                #      drip-out window (graph + weight still settling), or a
+                #      flashing warning. Here something changes every frame.
+                #   2. The change signature differs from the last drawn frame —
+                #      catches discrete idle changes (memory/target button,
+                #      battery, paddle edge, a cup placed on the scale).
+                # Also always render on wake (screen was just cleared) and on a
+                # save frame (the finished-shot snapshot must be drawn to be saved).
+                animating = data.paddle_on or (not self.drip_out_locked) or self.show_warning
+                render_sig = (
+                    round(data.weight, 1),
+                    round(data.memory.target, 1),
+                    data.memory.name,
+                    data.memory.color,
+                    round(data.shot_time_elapsed, 1),
+                    data.battery,
+                    data.paddle_on,
+                    self.warn_flash_state,
+                )
 
-                if data.save_image and img is not None:
-                    self.save_image(img)
-                self.lcd.ShowImage(img, 0, 0)
+                if animating or just_woke or data.save_image or render_sig != self.last_render_sig:
+                    img = draw_frame(w, h, data, self.display_orientation, display_avg, display_weight,
+                                     self.show_warning and self.warn_flash_state)
+
+                    if data.save_image and img is not None:
+                        self.save_image(img)
+                    self.lcd.ShowImage(img, 0, 0)
+                    self.last_render_sig = render_sig
+                # ---------------------
                 
             except Empty:
                 # Sleep Logic
@@ -555,6 +612,8 @@ class Display:
                     
                     logging.info("Display Entering Deep Sleep (PWM Stopped)")
                     screen_is_on = False
+                    # Cleared to black; force a fresh draw on next wake.
+                    self.last_render_sig = None
 
             except Exception as e:
                 logging.error(f"CRASH IN DISPLAY LOOP: {e}")
@@ -693,11 +752,14 @@ def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayO
 
     # --- 5. READY STATE (Lion Logo, or "Ready" text fallback) ---
     if lion_img is not None:
-        # Center the lion horizontally; center it vertically on the same band
-        # the old "Ready" box occupied so spacing stays consistent.
-        ready_band_h = value_font_lg.size + value_font_lg.size // 2
+        # Center the lion in the idle band between the header line and the
+        # footer line, so it stays centered regardless of lion_target_h.
+        band_top = header_h
+        band_bottom = footer_line_y
         lion_x = (width - lion_img.width) // 2
-        lion_y = int(ready_y + (ready_band_h - lion_img.height) // 2)
+        lion_y = int(band_top + (band_bottom - band_top - lion_img.height) // 2)
+        if lion_y < band_top:
+            lion_y = band_top  # don't overrun the header if the image is tall
         img.paste(lion_img, (lion_x, lion_y), lion_img)
     else:
         fmt_ready = "Ready"
@@ -748,13 +810,15 @@ def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayO
 
     # --- 7. TIMEOUT-STOP WARNING OVERLAY ---
     if show_warning and warning_img is not None:
-        # Centre the 50x50 icon inside the graph band
+        # Centre the warning icon inside the graph band.
         if is_landscape:
             graph_center_y = graph_y + (145 // 2)
         else:
             graph_center_y = graph_y + (160 // 2)
         warn_x = (width - warning_img.width) // 2
         warn_y = graph_center_y - warning_img.height // 2
+        if warn_y < graph_y:
+            warn_y = graph_y  # keep it below the header if the icon is tall
         img.paste(warning_img, (warn_x, warn_y), warning_img)
 
     return img
