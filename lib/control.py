@@ -5,7 +5,6 @@ import time
 import copy
 import threading
 import os
-import sys
 from collections import deque
 from timeit import default_timer as timer
 from typing import Optional, Callable
@@ -17,8 +16,17 @@ from lib.pyacaia import AcaiaScale
 
 default_target = 36.0
 default_overshoot = 1.0
-valid_overshoot_threshold = 5
 memory_save_file = "memory.save"
+
+# --- Overshoot learning (adaptive "cut early" margin) ---
+OVERSHOOT_LEARNING_RATE = 0.5    # fraction of each shot's error absorbed (EMA gain)
+MAX_OVERSHOOT_ERROR     = 5.0    # ignore shots that miss by more than this (anomaly)
+MIN_OVERSHOOT           = 0.0    # never cut after the target
+MAX_OVERSHOOT           = 5.0    # physical ceiling on drip-out margin
+
+# Weight delta (g) that counts as user activity for the auto-sleep timer
+ACTIVITY_WEIGHT_THRESHOLD = float(os.environ.get('ACTIVITY_WEIGHT_THRESHOLD', '0.3'))
+
 
 class TargetMemory:
     def __init__(self, name: str, color="#ff1303"):
@@ -26,17 +34,39 @@ class TargetMemory:
         self.target: float = default_target
         self.overshoot: float = default_overshoot
         self.color: str = color
+        self.shot_count: int = 0
 
     def target_minus_overshoot(self) -> float:
         return self.target - self.overshoot
 
     def update_overshoot(self, weight: float):
-        new_overshoot = self.overshoot + (weight - self.target)
-        if abs(new_overshoot) > valid_overshoot_threshold:
-            logging.error("New overshoot %.2f out of safe range, ignoring" % new_overshoot)
-        else:
-            self.overshoot = new_overshoot
-            logging.debug("Set new overshoot to %.2f" % self.overshoot)
+        error = weight - self.target
+
+        # 1. Reject anomalous shots — guard the ERROR, not the accumulated value.
+        #    A huge miss means a bumped scale / wrong basket / missed cutoff, not
+        #    a real change in drip-out, so we refuse to learn from it.
+        if abs(error) > MAX_OVERSHOOT_ERROR:
+            logging.error(
+                "Shot ended %.2fg off target (%.2f vs %.2f) - outside sanity range, not learning"
+                % (error, weight, self.target))
+            return
+
+        # 2. Adaptive rate: trust the first shot fully, then settle to a smoothing
+        #    gain so a single odd shot can't yank the value around.
+        #    getattr() guards memories pickled before shot_count existed.
+        self.shot_count = getattr(self, 'shot_count', 0) + 1
+        alpha = max(OVERSHOOT_LEARNING_RATE, 1.0 / self.shot_count)
+
+        # 3. Move a fraction of the way toward correcting the error (EMA).
+        new_overshoot = self.overshoot + alpha * error
+
+        # 4. Clamp the RESULT to a physically sensible range.
+        new_overshoot = min(MAX_OVERSHOOT, max(MIN_OVERSHOOT, new_overshoot))
+
+        logging.info("Overshoot %s: %.2f -> %.2f (err %.2fg, a=%.2f, shot #%d)"
+                     % (self.name, self.overshoot, new_overshoot, error, alpha, self.shot_count))
+        self.overshoot = new_overshoot
+
 
 class ControlManager:
     TARE_GPIO = 4
@@ -54,53 +84,58 @@ class ControlManager:
         self.shot_timer_start: Optional[float] = None
         self.image_needs_save = False
         self.running = True
-        
+
+        # Serializes all relay state transitions (start vs stop) across the
+        # paddle callback thread, the watchdog thread, and the main loop.
+        self._relay_lock = threading.Lock()
+
+        # Tare callback, wired up later via add_tare_handler().
+        self._tare_callback: Optional[Callable] = None
+
         # --- AUTO-SLEEP CONFIG ---
         self.idle_timeout = int(os.environ.get('IDLE_TIMEOUT', 300))
         self.sleep_pause = int(os.environ.get('SLEEP_PAUSE', 360))
-        
+
         self.last_activity = timer()
         self.is_sleeping = False
         self.sleep_end_time = 0.0
         self.last_weight_check = 0.0
-        
-        # --- WATCHDOG LATCH (The Fix) ---
-        # If True, we ignore the paddle until it is toggled OFF and back ON
+
+        # --- WATCHDOG LATCH ---
+        # If True, we ignore the paddle until it is toggled OFF and back ON.
         self.paddle_release_required = False
-        # --------------------------------
 
         # ASYNC SCANNER VARIABLES
         self.discovered_mac: Optional[str] = None
-        self.scale_is_connected_flag = False 
-        
+        self.scale_is_connected_flag = False
+
         self.load_memory()
 
         self.relay = DigitalOutputDevice(ControlManager.RELAY_GPIO)
 
         # TARGET BUTTONS
         self.tgt_inc_button = Button(ControlManager.TGT_INC_GPIO, hold_time=0.5, hold_repeat=True, pull_up=True, bounce_time=0.02)
-        self.tgt_inc_button.when_released = lambda: (self._activity_detected(), self.__change_target(0.1))
-        self.tgt_inc_button.when_held = lambda: (self._activity_detected(), self.__change_target_held(1))
+        self.tgt_inc_button.when_released = lambda: (self._activity_detected(), self._change_target(0.1))
+        self.tgt_inc_button.when_held = lambda: (self._activity_detected(), self._change_target_held(1))
 
         self.tgt_dec_button = Button(ControlManager.TGT_DEC_GPIO, hold_time=0.5, hold_repeat=True, pull_up=True, bounce_time=0.02)
-        self.tgt_dec_button.when_released = lambda: (self._activity_detected(), self.__change_target(-0.1))
-        self.tgt_dec_button.when_held = lambda: (self._activity_detected(), self.__change_target_held(-1))
+        self.tgt_dec_button.when_released = lambda: (self._activity_detected(), self._change_target(-0.1))
+        self.tgt_dec_button.when_held = lambda: (self._activity_detected(), self._change_target_held(-1))
 
         # PADDLE SWITCH
         self.paddle_switch = Button(ControlManager.PADDLE_GPIO, pull_up=True, bounce_time=0.05)
-        self.paddle_switch.when_pressed = lambda: (self._activity_detected(), self.__start_shot())
-        
-        # --- TARE BUTTON (Updated for 5s Long Press) ---
-        self.tare_button = Button(ControlManager.TARE_GPIO, pull_up=True, hold_time=5.0) 
-        self.tare_button.when_held = lambda: self.__restart_service()
-        # -----------------------------------------------
+        self.paddle_switch.when_pressed = lambda: (self._activity_detected(), self._start_shot())
+
+        # --- TARE BUTTON (5s long-press restarts the service) ---
+        self.tare_button = Button(ControlManager.TARE_GPIO, pull_up=True, hold_time=5.0)
+        self.tare_button.when_held = lambda: self._restart_service()
 
         self.memory_button = Button(ControlManager.MEM_GPIO, pull_up=True)
-        self.memory_button.when_pressed = lambda: (self._activity_detected(), self.__rotate_memory())
+        self.memory_button.when_pressed = lambda: (self._activity_detected(), self._rotate_memory())
 
         self.scale_connect_button = Button(ControlManager.SCALE_CONNECT_GPIO, pull_up=True)
         self.scale_connect_button.when_pressed = lambda: self._activity_detected()
-        
+
         self.tgt_button_was_held = False
 
         # START THREADS
@@ -112,10 +147,10 @@ class ControlManager:
         self.scan_thread.daemon = True
         self.scan_thread.start()
 
-    def __restart_service(self):
+    def _restart_service(self):
         logging.warning("Tare button held for 5 seconds! Force restarting service...")
-        # Since the service runs as root, we can directly restart it via systemctl
-        # The '&' ensures the command runs in the background so it doesn't block python while killing it
+        # Service runs as root, so we can restart it directly. The '&' backgrounds
+        # the command so it doesn't block python while systemd kills us.
         os.system("systemctl restart lm-bbw &")
 
     # --- AUTO-SLEEP LOGIC ---
@@ -127,10 +162,10 @@ class ControlManager:
 
     def check_auto_sleep(self, scale: AcaiaScale):
         now = timer()
-        
+
         # Check for weight change (Activity)
         if scale.connected:
-            if abs(scale.weight - self.last_weight_check) > 0.3: # 0.3g threshold for activity
+            if abs(scale.weight - self.last_weight_check) > ACTIVITY_WEIGHT_THRESHOLD:
                 self._activity_detected()
             self.last_weight_check = scale.weight
 
@@ -140,7 +175,7 @@ class ControlManager:
                     logging.info(f"No activity for {self.idle_timeout}s -> Sleep Mode Active (Scanner Paused)")
                     self.is_sleeping = True
                     self.sleep_end_time = now + self.sleep_pause
-                
+
                     # Disconnect scale if connected
                     logging.info("Disconnecting scale for sleep...")
                     scale.disconnect()
@@ -149,7 +184,7 @@ class ControlManager:
         elif self.is_sleeping:
             if now > self.sleep_end_time:
                 logging.info("Sleep Pause Timeout Reached -> Auto-Waking System")
-                self._activity_detected() # Resets flags and timers
+                self._activity_detected()  # Resets flags and timers
     # ------------------------
 
     def _watchdog_loop(self):
@@ -161,6 +196,8 @@ class ControlManager:
         while self.running:
 
             # 1. HANDLE MANUAL STOP (Paddle moved to OFF)
+            #    Require the paddle to read open across several samples so a brief
+            #    electrical transient (e.g. pump spin-up coupling) can't kill a shot.
             if self.relay_on() and not self.paddle_switch.is_pressed:
                 confirmed_open = True
                 for _ in range(OPEN_CONFIRM_READS - 1):
@@ -168,40 +205,38 @@ class ControlManager:
                     if self.paddle_switch.is_pressed:
                         confirmed_open = False   # glitch — paddle came back
                         break
-                # re-check relay too, in case target-stop already ran
+                # re-check relay too, in case the target-weight stop already ran
                 if confirmed_open and self.relay_on() and not self.paddle_switch.is_pressed:
                     logging.info("Watchdog detected paddle OPEN - Stopping shot")
                     self.disable_relay()
 
             # 2. HANDLE LATCH RESET (Paddle is OFF)
-            # If paddle is OFF, we are allowed to start a new shot next time
+            #    If paddle is OFF, we are allowed to start a new shot next time.
             if not self.paddle_switch.is_pressed:
                 self.paddle_release_required = False
 
             # 3. HANDLE START (Paddle CLOSED)
             if not self.relay_on() and self.paddle_switch.is_pressed:
-                
-                # --- FIX: Check Safety Latch ---
+
+                # Safety latch: paddle is ON but we haven't seen it go OFF yet.
+                # Ignore it to prevent an auto-restart loop after an auto-stop.
                 if self.paddle_release_required:
-                    # Paddle is ON, but we haven't seen it go OFF yet.
-                    # Ignore it (Prevent restart loop).
                     time.sleep(0.05)
                     continue
-                # -------------------------------
 
-                time.sleep(0.05) # Debounce
+                time.sleep(0.05)  # Debounce
                 if self.paddle_switch.is_pressed:
                     if not self.relay_on():
                         logging.info("Watchdog detected paddle CLOSED - Force Starting shot")
                         self._activity_detected()
-                        self.__start_shot()
-            
+                        self._start_shot()
+
             time.sleep(0.05)
 
     def _bg_scan_loop(self):
         logging.info("Bluetooth Background Scanner Started")
         while self.running:
-            
+
             # --- PAUSE SCANNING IF SLEEPING ---
             if self.is_sleeping:
                 time.sleep(1)
@@ -214,7 +249,7 @@ class ControlManager:
                     if devices:
                         self.discovered_mac = devices[0]
                         logging.info("Scanner found Scale: %s (Handing over to Main Thread)" % self.discovered_mac)
-                        time.sleep(1) 
+                        time.sleep(1)
                     else:
                         time.sleep(6)
                 except Exception as e:
@@ -222,9 +257,14 @@ class ControlManager:
                     err_str = str(e)
                     if "AccessDenied" in err_str or "registered" in err_str or "Hello" in err_str:
                         logging.fatal(f"CRITICAL: D-Bus Connection Limit Reached. Restarting Service... Error: {err_str}")
-                        os._exit(1) # Kill Process. Systemd will restart it.
+                        # Failsafe: never leave the pump energised across a hard exit.
+                        try:
+                            self.relay.off()
+                        except Exception:
+                            pass
+                        os._exit(1)  # Kill Process. Systemd will restart it.
                     # -------------------------------------------------
-                    
+
                     logging.error("Scanner Error: %s" % e)
                     time.sleep(10)
             else:
@@ -242,33 +282,57 @@ class ControlManager:
             logging.error("Error persisting memory: %s" % e)
 
     def load_memory(self):
-        # Read colors from env, falling back to the current defaults
-        color_a = os.environ.get('MEMORY_A_COLOR', '#ff0000') # Red
-        color_b = os.environ.get('MEMORY_B_COLOR', '#00ff00') # Green
-        color_c = os.environ.get('MEMORY_C_COLOR', '#0000ff') # Blue
+        # Read colors from env, falling back to the current defaults.
+        color_a = os.environ.get('MEMORY_A_COLOR', '#ff0000')  # Red
+        color_b = os.environ.get('MEMORY_B_COLOR', '#00ff00')  # Green
+        color_c = os.environ.get('MEMORY_C_COLOR', '#0000ff')  # Blue
+
+        def fresh_memories():
+            return deque([TargetMemory("A", color_a),
+                          TargetMemory("B", color_b),
+                          TargetMemory("C", color_c)])
+
+        if not os.path.exists(memory_save_file):
+            logging.info("No saved memory found - initializing defaults")
+            self.memories = fresh_memories()
+            return
 
         try:
             with open(memory_save_file, 'rb') as savefile:
                 self.memories = pickle.load(savefile)
-            
-            # --- OVERRIDE SAVED COLORS WITH ENV CONFIG ---
-            # This allows color updates without deleting memory.save
-            for mem in self.memories:
-                if mem.name == "A":
-                    mem.color = color_a
-                elif mem.name == "B":
-                    mem.color = color_b
-                elif mem.name == "C":
-                    mem.color = color_c
-            # ---------------------------------------------
-            
         except Exception as e:
-            logging.warn("Not able to load memory from save, resetting memory to defaults. Error was: %s" % e)
-            self.memories = deque([TargetMemory("A", color_a), TargetMemory("B", color_b), TargetMemory("C", color_c)])
+            # The file exists but couldn't be read/unpickled. Don't silently
+            # discard it — preserve it for inspection, then start fresh.
+            logging.error("Failed to load memory (%s). Backing up and resetting to defaults." % e)
+            try:
+                backup = memory_save_file + ".corrupt"
+                os.replace(memory_save_file, backup)
+                logging.error("Moved unreadable memory file to %s" % backup)
+            except Exception as be:
+                logging.error("Could not back up bad memory file: %s" % be)
+            self.memories = fresh_memories()
+            return
+
+        # Backfill new fields on objects pickled by older versions, and apply
+        # color overrides from env (lets colors change without wiping memory).
+        for mem in self.memories:
+            if not hasattr(mem, 'shot_count'):
+                mem.shot_count = 0
+            if mem.name == "A":
+                mem.color = color_a
+            elif mem.name == "B":
+                mem.color = color_b
+            elif mem.name == "C":
+                mem.color = color_c
 
     def add_tare_handler(self, callback: Callable):
-        # Modified to trigger activity
-        self.tare_button.when_pressed = lambda: (self._activity_detected(), callback())
+        # Store the callback and wire the physical button to it (with activity).
+        self._tare_callback = callback
+        self.tare_button.when_pressed = lambda: (self._activity_detected(), self._do_tare())
+
+    def _do_tare(self):
+        if self._tare_callback is not None:
+            self._tare_callback()
 
     def should_scale_connect(self) -> bool:
         return self.scale_connect_button.value
@@ -281,27 +345,35 @@ class ControlManager:
             self.flow_rate_data.append(data_point)
             if len(self.flow_rate_data) > self.flow_rate_max_points:
                 self.flow_rate_data.popleft()
-            
+
     def disable_relay(self):
-        if self.relay_on():
+        # Take the lock only around the state transition. The memory save and the
+        # thread start happen afterwards so we never hold the lock across I/O.
+        do_save = False
+        memories_snapshot = None
+
+        with self._relay_lock:
+            if not self.relay_on():
+                return
             logging.info("disable relay")
             self.relay_off_time = timer()
-            
-            # --- FIX: Engage Safety Latch ---
-            # If the paddle is currently ON when we stop (Auto-Stop), 
-            # we require it to be released before next shot.
+
+            # If the paddle is still ON when we stop (i.e. target-weight auto-stop),
+            # require it to be released before another shot can start.
             if self.paddle_switch.is_pressed:
                 self.paddle_release_required = True
-            # --------------------------------
-            
+
             self.relay.off()
-            
-            if self.scale_is_connected_flag:
+
+            do_save = self.scale_is_connected_flag
+            if do_save:
                 memories_snapshot = copy.deepcopy(self.memories)
-                save_thread = threading.Thread(target=self._save_worker, args=(memories_snapshot,))
-                save_thread.start()
-            else:
-                logging.info("Scale disconnected - Skipping memory save")
+
+        if do_save:
+            save_thread = threading.Thread(target=self._save_worker, args=(memories_snapshot,))
+            save_thread.start()
+        else:
+            logging.info("Scale disconnected - Skipping memory save")
 
     def current_memory(self):
         return self.memories[0]
@@ -314,44 +386,46 @@ class ControlManager:
         else:
             return self.relay_off_time - self.shot_timer_start
 
-    def __change_target(self, amount):
+    def _change_target(self, amount):
         if not self.tgt_button_was_held:
             self.memories[0].target += amount
         else:
             self.tgt_button_was_held = False
 
-    def __change_target_held(self, amount):
+    def _change_target_held(self, amount):
         self.tgt_button_was_held = True
         if amount > 0:
             self.memories[0].target = math.floor(self.memories[0].target) + math.floor(amount)
         if amount < 0:
             self.memories[0].target = math.ceil(self.memories[0].target) + math.ceil(amount)
 
-    def __rotate_memory(self):
+    def _rotate_memory(self):
         self.memories.rotate(-1)
 
-    def __start_shot(self):
-        # Additional safety check against rapid restarts
-        if self.relay_on() or self.paddle_release_required:
-            return
-            
-        logging.info("Start shot")
-        self.flow_rate_data = deque([])
-        
-        # --- LOGIC: Priority to Relay (Coffee First) ---
-        self.shot_timer_start = timer()
-        self.relay.on()
-        
+    def _start_shot(self):
+        # Take the lock only around the relay transition. The auto-tare (a BLE
+        # write that can block) happens AFTER releasing the lock, so a slow or
+        # hung tare can never delay an emergency stop on disable_relay().
+        with self._relay_lock:
+            if self.relay_on() or self.paddle_release_required:
+                return
+
+            logging.info("Start shot")
+            self.flow_rate_data = deque([])
+
+            # Priority to relay (coffee first), then tare.
+            self.shot_timer_start = timer()
+            self.relay.on()
+
         if self.scale_is_connected_flag:
             try:
-                if self.tare_button.when_pressed:
-                    logging.info("Scale Connected -> Auto-Taring...")
-                    self.tare_button.when_pressed()
+                logging.info("Scale Connected -> Auto-Taring...")
+                self._do_tare()
             except Exception as e:
                 logging.error(f"Auto-Tare failed (Shot continuing): {e}")
         else:
             logging.info("Scale Not Connected -> Skipping Tare")
-        # -----------------------------------------------
+
 
 def try_connect_scale(scale: AcaiaScale, mgr: ControlManager) -> bool:
     try:
@@ -368,29 +442,28 @@ def try_connect_scale(scale: AcaiaScale, mgr: ControlManager) -> bool:
 
         if mgr.discovered_mac:
             logging.info("Main Thread connecting to found MAC: %s" % mgr.discovered_mac)
-            
-            # --- FIX 1: Reset Idle Timer immediately ---
-            mgr._activity_detected() 
-            # -------------------------------------------
+
+            # Reset idle timer immediately on a connect attempt.
+            mgr._activity_detected()
 
             scale.mac = mgr.discovered_mac
-            
+
             logging.info("Clearing old shot data (Preparing to Connect)")
             mgr.flow_rate_data.clear()
-            
-            # --- FIX 2: Only reset timer if we are NOT mid-shot ---
+
+            # Only reset the shot timer if we are NOT mid-shot.
             if not mgr.relay_on():
                 mgr.shot_timer_start = None
-            # ------------------------------------------------------
 
-            # Check for ghost relay state (Safety)
-            if mgr.relay_on() and not mgr.paddle_switch.is_pressed:
-                logging.warning("Ghost Start detected during connection. Forcing Relay OFF.")
-                mgr.relay.off()
+            # Check for ghost relay state (safety) under the relay lock.
+            with mgr._relay_lock:
+                if mgr.relay_on() and not mgr.paddle_switch.is_pressed:
+                    logging.warning("Ghost Start detected during connection. Forcing Relay OFF.")
+                    mgr.relay.off()
 
             scale.connect()
-            
-            mgr.discovered_mac = None 
+
+            mgr.discovered_mac = None
             return True
 
         return False

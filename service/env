@@ -14,8 +14,8 @@ GRAPH_HISTORY_SECONDS=60
 DRIP_OUT_WINDOW=3.5
 
 # Graph limits
-GRAPH_MAX_VALUE = 4
-GRAPH_MAX_DENSITY_THRESHOLD = 6
+GRAPH_MAX_VALUE=4
+GRAPH_MAX_DENSITY_THRESHOLD=6
 
 # Graph Smoothing - Lower is more responsive.
 # Controls how many data points are averaged for the line drawing (higher = smoother but more lag)
@@ -30,11 +30,17 @@ IDLE_TIMEOUT=300
 # Set to time which gives the scale plenty of time to turn off.
 SLEEP_PAUSE=360
 
+# Activity Threshold:
+# Weight (g) change required to reset the idle timer (wake from sleep).
+# Must be enough to overcome scale noise (typically 0.1-0.2g).
+ACTIVITY_WEIGHT_THRESHOLD=0.3
+
 # Screen Brightness (0 to 100)
 DISPLAY_BRIGHTNESS=100
 
 # Memory Profile Colors (Hex Codes)
-# Default colors are Red #ff0000, Green #25a602, Blue #376efa
+# Default colors are Red #ff1303, Green #25a602, Blue #376efa
 MEMORY_A_COLOR=#ff0000
 MEMORY_B_COLOR=#00ff70
 MEMORY_C_COLOR=#0070ff
+
