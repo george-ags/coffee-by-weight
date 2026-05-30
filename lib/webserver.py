@@ -24,10 +24,13 @@ KNOWN_CONFIG_KEYS = {
     'SLEEP_PAUSE': '360',
     'ACTIVITY_WEIGHT_THRESHOLD': '0.3',
     'DISPLAY_BRIGHTNESS': '100',
+    'DRIP_OUT_WINDOW': '3.5',
+    'MEMORY_A_NAME': '',
+    'MEMORY_B_NAME': '',
+    'MEMORY_C_NAME': '',
     'MEMORY_A_COLOR': '#ff1303',
     'MEMORY_B_COLOR': '#25a602',
-    'MEMORY_C_COLOR': '#376efa',
-    'DRIP_OUT_WINDOW': '3.5'
+    'MEMORY_C_COLOR': '#376efa'
 }
 
 class GalleryHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):

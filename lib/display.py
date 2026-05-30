@@ -39,6 +39,20 @@ Drip_Out_Window = float(os.environ.get('DRIP_OUT_WINDOW', '3.5'))
 # --- SCREEN CONFIGURATION ---
 display_brightness = int(os.environ.get('DISPLAY_BRIGHTNESS', '100'))
 
+# --- MEMORY BANK DISPLAY NAMES ---
+# Optional human-readable names per bank. If set, the header shows the name
+# (e.g. "Espresso") instead of "TARGET A". Blank/unset falls back to "TARGET X".
+MEMORY_NAMES = {
+    'A': os.environ.get('MEMORY_A_NAME', '').strip(),
+    'B': os.environ.get('MEMORY_B_NAME', '').strip(),
+    'C': os.environ.get('MEMORY_C_NAME', '').strip(),
+}
+
+def memory_label(bank_name: str) -> str:
+    """Human name for a bank if configured, else the default 'TARGET X'."""
+    custom = MEMORY_NAMES.get(bank_name, '')
+    return custom if custom else ("TARGET %s" % bank_name)
+
 # --- LOGO CONFIGURATION ---
 IMG_DIR="/opt/lm-bbw/lib/img/"
 
@@ -674,7 +688,16 @@ def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayO
     draw.text(((col_w - w) / 2, (header_h + 12 - h) / 2), fmt_weight, fg_color, header_val_font)
     
     # Column 2: Target
-    draw.text((lbl_x_2, lbl_y), "TARGET %s" % data.memory.name, data.memory.color, label_font)
+    target_label = memory_label(data.memory.name)
+    # If a custom name is too wide, drop to the smaller font so it can't overflow
+    # into the next column. The label starts at lbl_x_2; column 3 begins at
+    # col_w*2 (landscape) or the screen edge (portrait, where there are 2 cols).
+    next_col_x = (col_w * 2) if is_landscape else width
+    label_max_w = next_col_x - lbl_x_2 - 4
+    lbl_font = label_font
+    if draw.textlength(target_label, lbl_font) > label_max_w:
+        lbl_font = label_font_sml
+    draw.text((lbl_x_2, lbl_y), target_label, data.memory.color, lbl_font)
     fmt_target = "{:0.1f}".format(data.memory.target)
     # Use same font size for target
     w = draw.textlength(fmt_target, header_val_font)
