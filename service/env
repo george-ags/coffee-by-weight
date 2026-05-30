@@ -20,7 +20,7 @@ GRAPH_MAX_DENSITY_THRESHOLD=6
 # Graph Smoothing - Lower is more responsive.
 # Controls how many data points are averaged for the line drawing (higher = smoother but more lag)
 # If commented out, it defaults to calculating based on refresh rate (approx 10)
-FLOW_SMOOTHING_FACTOR=30
+FLOW_SMOOTHING_FACTOR=40
 
 # 1. How long to wait before sleeping (Seconds). For example: 600 = 10 mins.
 IDLE_TIMEOUT=300

@@ -189,6 +189,7 @@ class FlowGraph:
         else:
             self.x_pix_interval = width_pixels / 1
 
+
     def generate_graph(self) -> Image:
         points = list()
         i = 0
@@ -198,6 +199,19 @@ class FlowGraph:
             y_coord = abs(y_coord - self.y_pix)
             points.append((x_coord, y_coord))
             i += 1
+
+        # Collapse points that land on the same x pixel (keep mean y) so the line
+        # isn't over-tessellated into visible facets.
+        if len(points) > self.x_pix:
+            collapsed = {}
+            for (px, py) in points:
+                key = int(round(px))
+                if key in collapsed:
+                    collapsed[key] = (collapsed[key] + py) / 2.0
+                else:
+                    collapsed[key] = py
+            points = [(x, collapsed[x]) for x in sorted(collapsed)]
+
         img = Image.new("RGBA", (self.x_pix, self.y_pix), "BLACK")
         draw = ImageDraw.Draw(img)
 
@@ -313,10 +327,14 @@ class DisplayData:
         self.timeout_stop = timeout_stop
 
     def flow_rate_moving_avg(self) -> list:
-        flow_data_series = pd.Series(self.flow_data)
-        flow_data_windows = flow_data_series.rolling(self.flow_smooth_factor)
-        return flow_data_windows.mean().dropna().to_list()
-
+        if not self.flow_data:
+            return []
+        s = pd.Series(self.flow_data)
+        # Centered rolling mean: averages flow_smooth_factor//2 samples on each
+        # side. A mean (unlike a median) preserves the peak/plateau amplitude of
+        # the flow envelope, and center=True avoids lag/left-shift. min_periods=1
+        # keeps the curve full-length (no leading NaNs to drop).
+        return s.rolling(self.flow_smooth_factor, min_periods=1, center=True).mean().to_list()
 
 class DisplaySize(Enum):
     SIZE_2_4 = 1
