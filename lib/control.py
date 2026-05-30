@@ -400,7 +400,11 @@ class ControlManager:
             self.memories[0].target = math.ceil(self.memories[0].target) + math.ceil(amount)
 
     def _rotate_memory(self):
+        prev = self.memories[0].name
         self.memories.rotate(-1)
+        new = self.memories[0]
+        logging.info("Switched memory bank %s -> %s (target %.1fg, overshoot %.2fg)"
+                      % (prev, new.name, new.target, new.overshoot))
 
     def _start_shot(self):
         # Take the lock only around the relay transition. The auto-tare (a BLE
