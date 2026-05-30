@@ -574,9 +574,14 @@ class Display:
                 w, h = (self.lcd.width, self.lcd.height) if self.display_orientation == DisplayOrientation.PORTRAIT else (self.lcd.height, self.lcd.width)
                 
                 # Hide summary line during drip-out (Only pass to renderer if lock has fully engaged)
-                # Also hide if this is a timeout shot - data is not meaningful
-                display_avg = self.frozen_avg if (self.drip_out_locked and not data.timeout_stop) else None
-                display_weight = self.frozen_weight if (self.drip_out_locked and not data.timeout_stop) else None
+                # Also hide if this is a timeout shot - data is not meaningful.
+                # EXCEPTION: on the save frame, always include the summary so the
+                # shot-history snapshot shows the cup/weight/avg. The save frame
+                # arrives ~3s after stop (inside the drip-out window), when the
+                # lock is still open, so without this the saved image omits it.
+                show_summary = (self.drip_out_locked or data.save_image) and not data.timeout_stop
+                display_avg = self.frozen_avg if show_summary else None
+                display_weight = self.frozen_weight if show_summary else None
 
                 # --- RENDER GATING ---
                 # The state machine above runs every cycle, but the expensive part
