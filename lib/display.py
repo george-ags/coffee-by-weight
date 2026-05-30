@@ -40,6 +40,7 @@ IMG_DIR="/opt/lm-bbw/lib/img/"
 logo_img = None
 coffee_cup_img = None
 warning_img = None
+lion_img = None
 
 try:
     # Load Main Logo
@@ -50,6 +51,15 @@ try:
         new_w = int(raw_img.width * resize_factor)
         new_h = int(raw_img.height * resize_factor)
         logo_img = raw_img.resize((new_w, new_h))
+
+    # Load Lion Logo (shown in the idle "Ready" area)
+    lion_path = IMG_DIR + "LM-lion-logo.png"
+    if os.path.exists(lion_path):
+        raw_lion_img = Image.open(lion_path).convert("RGBA")
+        # Scale to fit a target height while preserving aspect ratio.
+        lion_target_h = 120
+        lion_w = int(lion_target_h * (raw_lion_img.width / raw_lion_img.height))
+        lion_img = raw_lion_img.resize((lion_w, lion_target_h))
         
     # Load Coffee Cup Icon
     cup_path = IMG_DIR + "coffee-cup.png"
@@ -64,7 +74,9 @@ try:
     warn_path = IMG_DIR + "warning.png"
     if os.path.exists(warn_path):
         raw_warn_img = Image.open(warn_path).convert("RGBA")
-        warning_img = raw_warn_img.resize((100, 100))
+        warn_target_h = 120
+        warn_w = int(warn_target_h * (raw_warn_img.width / raw_warn_img.height))
+        warning_img = raw_warn_img.resize((warn_w, warn_target_h))
 
 except Exception as e:
     logging.error(f"Error loading images: {e}")
@@ -661,15 +673,23 @@ def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayO
              logo_y = int(285 + (35 - logo_img.height) // 2)
              img.paste(logo_img, (logo_x, logo_y), logo_img)
 
-    # --- 5. READY BOX ---
-    fmt_ready = "Ready"
-    # Use main font for Ready text
-    w = draw.textlength(fmt_ready, value_font_lg)
-    h = value_font_lg.size + value_font_lg.size // 2
-    center_x = width // 2
-    
-    draw.rectangle((center_x - w / 2 - 4, ready_y, center_x + w / 2 + 4, ready_y + h), bg_color, data.memory.color, 4)
-    draw.text((center_x - w / 2, ready_y), fmt_ready, fg_color, value_font_lg)
+    # --- 5. READY STATE (Lion Logo, or "Ready" text fallback) ---
+    if lion_img is not None:
+        # Center the lion horizontally; center it vertically on the same band
+        # the old "Ready" box occupied so spacing stays consistent.
+        ready_band_h = value_font_lg.size + value_font_lg.size // 2
+        lion_x = (width - lion_img.width) // 2
+        lion_y = int(ready_y + (ready_band_h - lion_img.height) // 2)
+        img.paste(lion_img, (lion_x, lion_y), lion_img)
+    else:
+        fmt_ready = "Ready"
+        # Use main font for Ready text
+        w = draw.textlength(fmt_ready, value_font_lg)
+        h = value_font_lg.size + value_font_lg.size // 2
+        center_x = width // 2
+
+        draw.rectangle((center_x - w / 2 - 4, ready_y, center_x + w / 2 + 4, ready_y + h), bg_color, data.memory.color, 4)
+        draw.text((center_x - w / 2, ready_y), fmt_ready, fg_color, value_font_lg)
 
     # --- 6. GRAPH ---
     if data.flow_data is not None and len(data.flow_data) > 0:
