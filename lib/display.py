@@ -605,6 +605,10 @@ class Display:
                     data.battery,
                     data.paddle_on,
                     self.warn_flash_state,
+                    # Include summary visibility so the frame where the summary
+                    # line first appears (drip-out lock closing) isn't skipped by
+                    # the gate for having an otherwise-unchanged signature.
+                    show_summary,
                 )
 
                 if animating or just_woke or data.save_image or render_sig != self.last_render_sig:
@@ -633,6 +637,15 @@ class Display:
                     screen_is_on = False
                     # Cleared to black; force a fresh draw on next wake.
                     self.last_render_sig = None
+
+                    # Clear transient shot state so a reconnect/wake starts fresh
+                    # (logo screen) rather than resuming a stale flashing timeout
+                    # warning or a leftover summary line from the previous shot.
+                    self.show_warning = False
+                    self.warn_flash_state = False
+                    self.frozen_avg = None
+                    self.frozen_weight = None
+                    self.drip_out_locked = True
 
             except Exception as e:
                 logging.error(f"CRASH IN DISPLAY LOOP: {e}")
