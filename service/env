@@ -5,7 +5,7 @@ LOGLEVEL=INFO
 DISPLAY_ORIENTATION=landscape
 
 # Main Loop Speed (Heartbeat) - Keep fast (0.1) for responsive buttons
-REFRESH_RATE=0.1
+REFRESH_RATE=0.3
 
 # Graph History - Keep 60 seconds of data on screen
 GRAPH_HISTORY_SECONDS=60
@@ -14,13 +14,19 @@ GRAPH_HISTORY_SECONDS=60
 DRIP_OUT_WINDOW=3.5
 
 # Graph limits
-GRAPH_MAX_VALUE=4
-GRAPH_MAX_DENSITY_THRESHOLD=6
+GRAPH_MAX_VALUE=3
+GRAPH_MAX_DENSITY_THRESHOLD=5
 
 # Graph Smoothing - Lower is more responsive.
 # Controls how many data points are averaged for the line drawing (higher = smoother but more lag)
 # If commented out, it defaults to calculating based on refresh rate (approx 10)
 FLOW_SMOOTHING_FACTOR=30
+
+# Revert the screen to the Ready/logo view after this many seconds of
+# inactivity following a shot (button press or weight change resets it).
+# Softer than sleep: the scale stays connected and the screen stays on.
+# Keep this <= IDLE_TIMEOUT so it shows before the system fully sleeps.
+READY_SCREEN_TIMEOUT=180
 
 # 1. How long to wait before sleeping (Seconds). For example: 600 = 10 mins.
 IDLE_TIMEOUT=300

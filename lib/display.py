@@ -333,7 +333,7 @@ class FlowGraph:
 class DisplayData:
     def __init__(self, weight: float, sample_rate: float, memory, flow_data: list, battery: int,
                  paddle_on: bool, shot_time_elapsed: float, save_image: bool = False,
-                 flow_smooth_factor: int = 10, timeout_stop: bool = False):
+                 flow_smooth_factor: int = 10, timeout_stop: bool = False, force_ready: bool = False):
         self.weight = weight
         self.sample_rate = sample_rate
         self.memory = memory
@@ -344,6 +344,9 @@ class DisplayData:
         self.save_image = save_image
         self.flow_smooth_factor = flow_smooth_factor
         self.timeout_stop = timeout_stop
+        # When True, the display reverts to the Ready/logo screen (clears the
+        # post-shot summary and graph). Set after READY_SCREEN_TIMEOUT of idle.
+        self.force_ready = force_ready
 
     def flow_rate_moving_avg(self) -> list:
         if not self.flow_data:
@@ -573,13 +576,22 @@ class Display:
 
                 w, h = (self.lcd.width, self.lcd.height) if self.display_orientation == DisplayOrientation.PORTRAIT else (self.lcd.height, self.lcd.width)
                 
+                # Revert to the Ready/logo screen after READY_SCREEN_TIMEOUT of
+                # idle: drop the finished-shot summary and clear the local frozen
+                # state, and below we skip the graph by blanking flow_data.
+                if data.force_ready:
+                    self.frozen_avg = None
+                    self.frozen_weight = None
+                    self.drip_out_locked = True
+                    data.flow_data = []   # empty graph -> draw_frame shows the logo
+
                 # Hide summary line during drip-out (Only pass to renderer if lock has fully engaged)
                 # Also hide if this is a timeout shot - data is not meaningful.
                 # EXCEPTION: on the save frame, always include the summary so the
                 # shot-history snapshot shows the cup/weight/avg. The save frame
                 # arrives ~3s after stop (inside the drip-out window), when the
                 # lock is still open, so without this the saved image omits it.
-                show_summary = (self.drip_out_locked or data.save_image) and not data.timeout_stop
+                show_summary = (self.drip_out_locked or data.save_image) and not data.timeout_stop and not data.force_ready
                 display_avg = self.frozen_avg if show_summary else None
                 display_weight = self.frozen_weight if show_summary else None
 
@@ -609,6 +621,9 @@ class Display:
                     # line first appears (drip-out lock closing) isn't skipped by
                     # the gate for having an otherwise-unchanged signature.
                     show_summary,
+                    # Include force_ready so the transition TO the logo screen
+                    # renders even though nothing else in the signature changed.
+                    data.force_ready,
                 )
 
                 if animating or just_woke or data.save_image or render_sig != self.last_render_sig:

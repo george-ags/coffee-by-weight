@@ -96,6 +96,11 @@ class ControlManager:
         self.idle_timeout = int(os.environ.get('IDLE_TIMEOUT', 300))
         self.sleep_pause = int(os.environ.get('SLEEP_PAUSE', 360))
 
+        # Seconds of inactivity after which the screen reverts to the Ready/logo
+        # view (softer than full sleep: stays connected and the screen stays on).
+        # Should be <= idle_timeout to be visible before the system sleeps.
+        self.ready_screen_timeout = int(os.environ.get('READY_SCREEN_TIMEOUT', 180))
+
         self.last_activity = timer()
         self.is_sleeping = False
         self.sleep_end_time = 0.0
@@ -186,6 +191,17 @@ class ControlManager:
                 logging.info("Sleep Pause Timeout Reached -> Auto-Waking System")
                 self._activity_detected()  # Resets flags and timers
     # ------------------------
+
+    def should_show_ready_screen(self) -> bool:
+        """
+        True when the screen should drop the finished-shot view and revert to
+        the Ready/logo screen: no activity for READY_SCREEN_TIMEOUT seconds, and
+        not mid-shot. Resets on any activity (button press or weight change),
+        same as the sleep timer. Softer than sleep — stays connected/awake.
+        """
+        if self.relay_on():
+            return False
+        return (timer() - self.last_activity) > self.ready_screen_timeout
 
     def _watchdog_loop(self):
         logging.info("Paddle Watchdog Started")

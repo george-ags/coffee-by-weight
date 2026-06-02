@@ -172,7 +172,8 @@ def main():
         last_relay_state = relay_is_on
 
         if scale is not None and scale.connected:
-            (last_sample_time, last_weight) = update_display(scale, mgr, display, last_sample_time, last_weight, timeout_stop)
+            force_ready = mgr.should_show_ready_screen()
+            (last_sample_time, last_weight) = update_display(scale, mgr, display, last_sample_time, last_weight, timeout_stop, force_ready)
         else:
             display.display_off()
             # Reset timing variables on disconnect
@@ -191,7 +192,7 @@ def main():
     logging.info("Exiting on stop")
 
 
-def update_display(scale: AcaiaScale, mgr: ControlManager, display: Display, last_time: float, last_weight: float, timeout_stop: bool = False) -> (float, float):
+def update_display(scale: AcaiaScale, mgr: ControlManager, display: Display, last_time: float, last_weight: float, timeout_stop: bool = False, force_ready: bool = False) -> (float, float):
     now = timer()
     weight = scale.weight
     sample_rate = 0.0
@@ -202,7 +203,7 @@ def update_display(scale: AcaiaScale, mgr: ControlManager, display: Display, las
         mgr.add_flow_rate_data(g_per_s)
     data = DisplayData(weight, sample_rate, mgr.current_memory(), mgr.flow_rate_data,
                        scale.battery, mgr.relay_on(), mgr.shot_time_elapsed(),
-                       mgr.image_needs_save, smoothing, timeout_stop=timeout_stop)
+                       mgr.image_needs_save, smoothing, timeout_stop=timeout_stop, force_ready=force_ready)
     display.display_on()
     display.put_data(data)
     mgr.image_needs_save = False
