@@ -11,8 +11,7 @@ from typing import Optional, Callable
 
 from gpiozero import Button, DigitalOutputDevice
 
-import lib.scale_acaia as scale_acaia
-from lib.scale_acaia import AcaiaScale
+from lib.scale_acaia import AcaiaScale, find_acaia_devices
 
 default_target = 36.0
 default_overshoot = 1.0
@@ -278,7 +277,7 @@ class ControlManager:
 
             if self.should_scale_connect() and not self.scale_is_connected_flag and self.discovered_mac is None:
                 try:
-                    devices = scale_acaia.find_acaia_devices(timeout=1)
+                    devices = find_acaia_devices(timeout=1)
                     if devices:
                         self.discovered_mac = devices[0]
                         logging.info("Scanner found Scale: %s (Handing over to Main Thread)" % self.discovered_mac)
