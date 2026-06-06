@@ -11,8 +11,8 @@ from typing import Optional, Callable
 
 from gpiozero import Button, DigitalOutputDevice
 
-import lib.pyacaia as pyacaia
-from lib.pyacaia import AcaiaScale
+import lib.scale_acaia as scale_acaia
+from lib.scale_acaia import AcaiaScale
 
 default_target = 36.0
 default_overshoot = 1.0
@@ -106,6 +106,12 @@ class ControlManager:
         self.sleep_end_time = 0.0
         self.last_weight_check = 0.0
 
+        # Latched Ready/logo state. Set True once READY_SCREEN_TIMEOUT of idle
+        # passes; stays True (sticky) through weight wiggle and button presses,
+        # and is only cleared when a new shot starts. This keeps the logo on
+        # screen until the next pour rather than flipping back to the old graph.
+        self.ready_screen_active = False
+
         # --- WATCHDOG LATCH ---
         # If True, we ignore the paddle until it is toggled OFF and back ON.
         self.paddle_release_required = False
@@ -194,14 +200,25 @@ class ControlManager:
 
     def should_show_ready_screen(self) -> bool:
         """
-        True when the screen should drop the finished-shot view and revert to
-        the Ready/logo screen: no activity for READY_SCREEN_TIMEOUT seconds, and
-        not mid-shot. Resets on any activity (button press or weight change),
-        same as the sleep timer. Softer than sleep — stays connected/awake.
+        Returns the latched Ready/logo state.
+
+        Becomes True once there has been no activity for READY_SCREEN_TIMEOUT
+        seconds (and not mid-shot). Once latched it STAYS True through weight
+        changes and button presses — it is only cleared when a new shot starts
+        (see _start_shot). This makes the logo sticky until the next pour rather
+        than reverting to the previous flow graph on any activity.
         """
         if self.relay_on():
+            # Mid-shot: never show the ready screen. (The latch is cleared at
+            # shot start anyway; this is just belt-and-suspenders.)
             return False
-        return (timer() - self.last_activity) > self.ready_screen_timeout
+
+        if not self.ready_screen_active:
+            if (timer() - self.last_activity) > self.ready_screen_timeout:
+                self.ready_screen_active = True
+                logging.info("Idle for %ds -> reverting to Ready/logo screen" % self.ready_screen_timeout)
+
+        return self.ready_screen_active
 
     def _watchdog_loop(self):
         logging.info("Paddle Watchdog Started")
@@ -261,7 +278,7 @@ class ControlManager:
 
             if self.should_scale_connect() and not self.scale_is_connected_flag and self.discovered_mac is None:
                 try:
-                    devices = pyacaia.find_acaia_devices(timeout=1)
+                    devices = scale_acaia.find_acaia_devices(timeout=1)
                     if devices:
                         self.discovered_mac = devices[0]
                         logging.info("Scanner found Scale: %s (Handing over to Main Thread)" % self.discovered_mac)
@@ -432,6 +449,9 @@ class ControlManager:
 
             logging.info("Start shot")
             self.flow_rate_data = deque([])
+
+            # Leaving the Ready/logo screen for a live shot.
+            self.ready_screen_active = False
 
             # Priority to relay (coffee first), then tare.
             self.shot_timer_start = timer()

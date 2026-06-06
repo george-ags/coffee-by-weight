@@ -55,7 +55,7 @@ cover to hold it in place without visible fasteners.
 
 ## Configuration variables
 There are some new variables to control framerates and display orientation at `/etc/default/lm-bbw`, documented in the
-comments of this file (aka `service/env` in this repo).
+comments of this file (aka `service/lm-bbw.env` in this repo).
 
 ## Hardware
 
@@ -214,10 +214,10 @@ sudo pip3 install simplepyble --break-system-packages
 git clone https://github.com/george-ags/lm-bbw.git
 cd lm-bbw
 sudo mkdir -p /opt/lm-bbw/web
-sudo cp -r lm-bbw.py lib /opt/lm-bbw
+sudo cp -r *.py lib /opt/lm-bbw/
 sudo chmod +x /opt/lm-bbw/lm-bbw.py
-sudo cp service/lm-bbw.service /etc/systemd/system
-sudo cp service/env /etc/default/lm-bbw
+sudo cp service/lm-bbw.service /etc/systemd/system/
+sudo cp service/lm-bbw.env /etc/default/
 sudo systemctl daemon-reload
 sudo systemctl enable --now lm-bbw
 ```

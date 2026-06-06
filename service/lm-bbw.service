@@ -10,7 +10,7 @@ ExecStartPre=/bin/sh -c 'rfkill unblock bluetooth; bluetoothctl power off; sleep
 # ---------------------------------------------
 
 ExecStart=python3 /opt/lm-bbw/lm-bbw.py
-EnvironmentFile=/etc/default/lm-bbw
+EnvironmentFile=/etc/default/lm-bbw.env
 WorkingDirectory=/opt/lm-bbw
 Restart=always
 TimeoutSec=10

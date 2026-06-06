@@ -14,7 +14,7 @@ from typing import Optional
 from lib import control
 from lib.control import ControlManager
 from lib.display import Display, DisplayData, DisplaySize
-from lib.pyacaia import AcaiaScale
+from lib.scale_acaia import AcaiaScale
 from lib.webserver import WebServer
 
 WEB_PORT = 80

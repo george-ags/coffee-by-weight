@@ -8,7 +8,7 @@ import sys
 import threading
 
 # Pointing to the systemd environment file
-ENV_FILE_PATH = '/etc/default/lm-bbw'
+ENV_FILE_PATH = '/etc/default/lm-bbw.env'
 
 # Master list of all editable configuration keys and their defaults.
 # This ensures they always appear in the Web UI, even if they aren't written in the env file yet.
