@@ -1,0 +1,3 @@
+[submodule "lib/BooKooCode/OpenSource"]
+	path = lib/BooKooCode/OpenSource
+	url = https://github.com/BooKooCode/OpenSource.git
