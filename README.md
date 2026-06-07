@@ -17,10 +17,16 @@ This project was inspired by and originally based on Marcus Sorensen's
 [Apollo](https://github.com/mlsorensen/apollo) project — with deep gratitude and
 appreciation.
 
+## Demo
+
+▶️ **[Watch the demo video](./doc/lm-bbw.mp4)** — LM-BBW landing a shot on target.
+
+
 ---
 
 ## Table of contents
 
+- [Demo](#demo)
 - [Features](#features)
 - [How it works](#how-it-works)
 - [Hardware](#hardware)
@@ -348,7 +354,7 @@ Lunar, just leave the toggle engaged and continue powering the scale on/off as b
 
 A high-level architecture overview — processes, threads, the shot lifecycle, the
 display state machine, and the configuration flow — is in
-[LM-BBW_Architecture.md](./LM-BBW_Architecture.md).
+[LM-BBW_Architecture.md](./doc/LM-BBW_Architecture.md).
 
 ### ControlManager (`lib/control.py`)
 
