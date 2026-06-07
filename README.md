@@ -342,30 +342,9 @@ button (I never used the lock in over a year). Engaged, it connects to the scale
 turns the screen on; disengaged, it disconnects and turns the screen off. For a regular
 Lunar, just leave the toggle engaged and continue powering the scale on/off as before.
 
-### Horizontal display & custom top panel
-
-Part of an effort to build a nicer enclosure that integrates into the Micra's top
-panel. All wiring and setup still applies, except for printing a new top panel and
-using 8 mm push switches in place of the toggle switch for target selection.
-
-![Top cover](./doc/lm-bbw-top-cover.png)
-
-The "LM-bbw top cover" 3D-printing models are in the `doc` folder.
-
-![Top cover wiring](./doc/lm-bbw-top-cover-wiring.png)
-
-I've watched temperatures closely and never seen the Pi throttle while installed.
-Consider printing the top cover in something more heat-resistant such as ABS or ASA. I
-used PLA Carbon Fiber (rated to ~55 °C) for the texture and lined the inside shell with
-a thin layer of neoprene foam; so far the top hasn't exceeded 42 °C. I replaced the top
-cover screws with non-stainless M4-0.7 screws and added 10 mm magnets to hold the cover
-without visible fasteners.
-
 ---
 
 ## Development
-
-![Design](./doc/design.png)
 
 A high-level architecture overview — processes, threads, the shot lifecycle, the
 display state machine, and the configuration flow — is in
@@ -389,12 +368,6 @@ after matplotlib proved too CPU-heavy and other libraries had their own drawback
 Sets up the Display and ControlManager, then orchestrates data collection, the
 target-weight cutoff, overshoot learning, and state updates.
 
-### Generating a test frame
-
-A single frame can be generated with `test_display.py` for display design changes.
-Running `pytest` should discover and run it and open the resulting image on your
-workstation.
-
 ---
 
 ## Credits & license
@@ -402,5 +375,4 @@ workstation.
 - Inspired by and originally based on [Apollo](https://github.com/mlsorensen/apollo) by Marcus Sorensen.
 - The WaveShare LCD drivers (`lib/lcdconfig.py`, `lib/LCD_2inch*.py`) are by the WaveShare team and retain their original MIT license.
 
-This is a personal hobby project provided as-is, without warranty. If you intend to
-redistribute it, please add an explicit project license.
+This is a personal hobby project provided as-is, without warranty. If you intend to redistribute it, please add an explicit project license. If you are a commercial organization and want to use this project please contact me.
