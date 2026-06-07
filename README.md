@@ -145,10 +145,10 @@ printer's tolerances.
 
 For smaller 3D pronters you can use the 2-piece design:
 
-![Enclosure part 1](./doc/LM-top-small.stl)
+[Enclosure part 1](./doc/LM-top-small.stl)
 
-![Enclosure part 2](./doc/LM-top-big-square.stl)
-![Enclosure part 2 - another option](./doc/LM-top-big-round.stl)
+[Enclosure part 2](./doc/LM-top-big-square.stl)
+[Enclosure part 2 - another option](./doc/LM-top-big-round.stl)
 
 The display mounts with four screws, alongside the buttons.
 
