@@ -1,216 +1,215 @@
-# LM-BBW (brew-by-weight) for La Marzocco Linea Micra machine & Acaia Lunar scale
+# LM-BBW — Brew-by-Weight for the La Marzocco Micra & Acaia Lunar
 
-This given work is forked and based on Marcus Sorensen's "apollo" project 
-(https://github.com/mlsorensen/apollo) - with big thanks and high appreciation !
+LM-BBW adds **brew-by-weight** to the La Marzocco Linea Micra using an Acaia Lunar
+scale. A small Raspberry Pi controller reads the scale over Bluetooth, displays the
+live shot, and acts as a proxy for the paddle switch — automatically stopping the
+shot when the cup reaches your target weight.
 
-LM-BBW helps land espresso on your Lunar scale. This project adds brew-by-weight and a small controller 
-for La Marzocco Micra with Acaia Lunar. It may also work with other Acaia Bluetooth scales like Pyxis. 
+It can be adapted to almost any espresso machine + Bluetooth scale combination, and
+already works with other Acaia scales such as the Pyxis and Umbra (support for other
+vendors will be added as needed).
 
-I should fully rewrite some files (like control.py and pyacaia.py to port it to Debian 12/13+ with some improvements)
+> **Note:** This is a hobby project — a proof of concept being beaten into shape — so
+> there is **no support**. Contributions are welcome, but it is built around my own
+> needs; for customization, forking and making it your own is the best path.
 
-This project is more about scale integration than Micra integration. It cannot do flow profiling or other advanced 
-control over the Micra, it is simply collecting data from the scale and acting as a proxy for the paddle switch.
+This project was inspired by and originally based on Marcus Sorensen's
+[Apollo](https://github.com/mlsorensen/apollo) project — with deep gratitude and
+appreciation.
 
-**This is a hobby project, as such there is no support.** It is sort of a hack/proof of concept being beaten into shape.
-Contributions are welcome, though this is very much designed to work according to my needs, for customization I'd 
-suggest forking and making it your own.
+---
 
-# UPDATES
+## Table of contents
 
-## Umbra support
-I've added support for the Acaia Umbra scale, which is very similar to the Lunar scale, but it lacks a display and onboard
-controls. This is ideal for integrations. Aside from being much less expensive. it is a bonus not to have to deal with 
-accidentally touching controls. The full blank slab is also nice aesthetically.  Additionally, it has a "sleep" mode. This 
-enables LM-BBW to just connect to the scale when needed, and the scale will go to sleep when disconnected - you don't need 
-to touch the scale at all except occasionally to charge or clean it!
+- [Features](#features)
+- [How it works](#how-it-works)
+- [Hardware](#hardware)
+- [Software installation](#software-installation)
+- [Configuration](#configuration)
+- [Web interface](#web-interface)
+- [Troubleshooting](#troubleshooting)
+- [Project notes](#project-notes)
+- [Development](#development)
+- [Credits & license](#credits--license)
 
-To accomodate this I've made one fundamental adjustment. I've comandeered the "target lock" toggle switch to become a 
-"connect" button. In over a year I never used this button anyway. When depressed, it will connect to the scale and turn 
-on the screen. When disabled it will disconnect and the screen will turn off. For a regular Lunar scale, simply leave the 
-toggle depressed and you can continue to manage the system by turning on/off the Lunar as before.
+---
 
-## Horizontal display
-This is a part of an effort to build a nicer enclosure, building the device into the top panel of the Micra. All of the
-wiring and setup below still applies, with the exception of printing a new top panel and using 8mm push switches in place
-of the toggle switch to select target weight.
+## Features
 
-![image](./doc/lm-bbw-top-cover.png)
+- **Brew-by-weight** — stops the shot automatically when the scale reaches the target weight (minus a learned drip-out margin).
+- **Adaptive overshoot learning** — after each good shot, the controller self-calibrates the drip-out margin so future shots land closer to target. Each memory bank learns independently.
+- **Three memory banks (A / B / C)** — each with its own target, learned overshoot, custom on-screen name, and accent color.
+- **Live display** — weight, target, timer, battery, and a smoothed real-time flow-rate graph on a 2" SPI screen.
+- **Shot history** — an image of every completed shot is saved and browsable through a built-in web gallery.
+- **Web configuration** — change settings from a browser; no SSH required.
+- **Auto-connect / auto-sleep** — reconnects to the last known scale and idles gracefully (especially handy with the display-less Umbra).
+- **Safety first** — paddle watchdog, emergency stop if the scale drops mid-shot, and a 60-second hard timeout.
+- **Portrait or landscape** display orientation; supports the WaveShare 2.0" and 2.4" modules.
 
-The "LM-bbw top cover" 3d printing models are in the doc folder.
+---
 
-In my setup I migrated from the Pi Zero 2W to the Raspberry Pi 5, which is overkill CPU-wise and I actually underclock to
-1600MHz, but it gives smoother frame rates. I'm sure a Pi 4 or 3 would work too. I use the lite Raspbian image since we 
-don't need a full GUI. I insulate the back of the device with tape and tuck it in the open space on the right near the 
-steam wand.
+## How it works
 
-I have monitored temperatures closely and not experienced a high enough temperature to throttle the Pi while installed. 
-Consider printing the top cover in something more heat resistant like ABS or ASA. I printed in PLA Carbon Fiber for a 
-nice texture, rated to withstand 55C, and I've coated the bottom inside shell with a thin layer of neoprene foam. So far 
-I haven't seen the top exceed 42C.
+The controller runs as a single main process (with background threads for the paddle
+watchdog, Bluetooth scanning, and the scale connection) plus a separate display
+process fed over a queue. It reads the paddle position, drives a relay that proxies
+the paddle circuit, streams weight from the scale, and decides when to cut the shot.
 
-I have replaced the top cover screws with M4-0.7 screws made of non-stainless and added 10mm magnets into the top
-cover to hold it in place without visible fasteners.
+For a detailed breakdown of the processes, the shot lifecycle, the display state
+machine, and the configuration flow, see
+[**LM-BBW_Architecture.md**](./doc/LM-BBW_Architecture.md).
 
-![image](./doc/lm-bbw-top-cover-wiring.png)
-
-## Configuration variables
-There are some new variables to control framerates and display orientation at `/etc/default/lm-bbw`, documented in the
-comments of this file (aka `service/lm-bbw.env` in this repo).
+---
 
 ## Hardware
 
-### Materials
+### Bill of materials
 
-Note that where external links are provided, they may not age well.
+> External links may not age well.
 
-* A Raspberry Pi Zero 2W w/soldered header
-* 5v relay w/3.3v compatible logic control
-* 5v 2a power supply
-* 2.1mm barrel jack connector/wiring harness
-* pushbutton switch x 2
-* toggle switch
-* up/down rocker switch (or two pushbutton switches)
-* 2" WaveShare 240x320 SPI display (or compatible)
-* Screws - M2.0, M2.5 4mm length, or #3-24 in 1/4" length depending on your 3d printer tolerances
-* Silicone 24AWG hook up wire
-* Soldering tool and/or 2.54mm crimping set
-* 3d printed enclosure, or self-provided alternative
+- Raspberry Pi Zero 2 W with soldered header (a Pi 3/4/5 also works)
+- 5 V relay with 3.3 V-compatible logic control
+- 5 V 2 A power supply
+- 2.1 mm barrel-jack connector / wiring harness
+- 2 × pushbutton switches
+- 1 × toggle switch
+- 1 × up/down rocker switch (or two more pushbuttons)
+- 2" WaveShare 240×320 SPI display (or compatible)
+- Screws: M2.0 / M2.5 4 mm, or #3-24 in 1/4", depending on your printer tolerances
+- 24 AWG silicone hook-up wire
+- Soldering tool and/or 2.54 mm crimping set
+- 3D-printed enclosure, or your own alternative
 
 ### Controller
 
-A Raspberry Pi was selected to accommodate easy adoption of existing Python libraries without having to
-rework them to function on a microcontroller.  Ultimately this is more flexible in terms of expanding
-functionality as well.
+A Raspberry Pi was chosen so existing Python libraries can be reused without porting
+to a microcontroller. It also leaves plenty of room to expand functionality. I run
+the Lite Raspberry Pi OS image since no desktop GUI is needed. In my build I moved
+from a Pi Zero 2 W to a Pi 5 (overkill, underclocked to 1600 MHz) purely for smoother
+frame rates — a Pi 3 or 4 would be fine.
 
 ### Display
 
-The software should support either the [WaveShare 2.0" display](https://www.waveshare.com/2inch-lcd-module.htm) 
-or the [2.4" display](https://www.waveshare.com/2.4inch-lcd-module.htm). The 2.4" display seems to have worse
-viewing angles and is less sharp, and display_size needs to be updated in `main()`. **For compatibility with the included enclosure, the 2" display should be used.**
+The software supports either the
+[WaveShare 2.0" display](https://www.waveshare.com/2inch-lcd-module.htm) or the
+[2.4" display](https://www.waveshare.com/2.4inch-lcd-module.htm). The 2.4" has worse
+viewing angles and is less sharp, and `display_size` must be updated in `main()`.
+**For compatibility with the included enclosure, use the 2" display.**
 
 ### Relay
 
-There isn't one specific relay to link to. Any 5v Arduino/Pi/ESP32 type relay should work. It will have 
-common/NC/NO connections on the relay side and 5v/gnd/control pin on the controller side.
+There is no single specific relay. Any 5 V Arduino/Pi/ESP32-style relay should work —
+it will have common/NC/NO terminals on the load side and 5 V/GND/control on the logic
+side.
 
 ### Buttons
 
-I use a momentary pushbutton switch for the tare and memory buttons, a toggle switch for the "scale connect" button,
-and an up/down rocker switch for adjusting the target. The up/down rocker switch can be thought of as two momentary
-switches with a common ground - you can use two separate buttons as well.
+I use momentary pushbuttons for tare and memory, a toggle switch for "scale connect",
+and an up/down rocker for adjusting the target. The rocker behaves as two momentary
+switches sharing a common ground, so two separate buttons work equally well.
 
-For compatibility with the included 3d printed enclosure, the buttons should be 12mm. The rocker switch should be
-rectangular and support 19mm x 13mm opening. 
-
-I found the quality of rocker switches a bit difficult, some had significant bounce leading to them being a bit tricky 
-to use. I bought several kinds and used what worked best. The model I ended up using was `MXU1-2-123`.
-
-#### Buttons Functionality
+For the included enclosure, buttons should be 12 mm, and the rocker should be
+rectangular fitting a 19 mm × 13 mm opening. Rocker-switch quality varied a lot — some
+bounced badly — so I tried several and settled on the `MXU1-2-123`.
 
 | Button | Function |
 |--------|----------|
-| Tare | Short press: Tare scale. Long press (5s): Restart lm-bbw service |
-| Memory | Rotate memory |
-| Scale Connect | Connect/disconnect scale |
-| Target Inc | Increment target |
-| Target Dec | Decrement target |
-| Paddle | Start/stop shot |
+| Tare | Short press: tare the scale. Long press (5 s): restart the lm-bbw service |
+| Memory | Rotate through memory banks A / B / C |
+| Scale Connect | Connect / disconnect the scale |
+| Target Inc | Increment target weight |
+| Target Dec | Decrement target weight |
+| Paddle | Start / stop the shot |
 
 ### Wiring
 
-I bought a crimping tool in order to finish off the connections with standard Dupont 2.54mm connectors for easy
-wiring up to the Raspberry Pi header.
+![Wiring diagram](./doc/wiring_diagram.png)
 
-![image](./doc/wiring%20diagram.png)
+I crimped standard Dupont 2.54 mm connectors for easy wiring to the Pi header. To
+simplify power and control between the Micra and the controller, I built a custom
+harness that keeps the relay/switch ground and power inside the Micra, leaving just
+4 pins back to the controller (5 V, GND, and one wire per IO).
 
-To simplify the wiring of power and controls between the Micra and the controller, I created a custom harness. This 
-keeps the ground and power connections for the relay and switches in the Micra, with just 5v,ground and one wire
-per IO going back to the controller (4 pins total).
+![Internal harness](./doc/internal_harness.jpg)
 
-![image](./doc/internal_harness.jpg)
+The Micra paddle is reached by removing the four screws above the group head, exposing
+a bundle with black and white wires on bullet connectors. Insert the relay and Pi into
+this circuit to read the paddle state and control the machine.
 
-The Micra paddle is accessible by removing the top four screws above the group head. Here, you would find a wiring
-bundle containing black and white wires connecting to the paddle. These have bullet connectors which can be 
-disconnected. You can insert the relay and Pi into this circuit to read the paddle state and control the Micra (or 
-perhaps another device).
-
-![image](./doc/paddle_connectors.jpeg)
+![Paddle connectors](./doc/paddle_connectors.jpeg)
 
 ### Enclosure
 
-The enclosure STL file can be found [here](doc/LM-bbw_2inch_v2.stl). It may need fine tuning, depending on the accuracy
-and tolerances of your printer.
+The enclosure STL is [here](doc/LM-top-full.stl). It may need fine-tuning for your
+printer's tolerances.
 
-![image](./doc/enclosure-front.png)
+For smaller 3D pronters you can use the 2-piece design:
 
-Looking from the inside, the display mounts with four screws to the far side, along with the buttons.
+![Enclosure part 1](./doc/LM-top-small.stl)
 
-![image](./doc/enclosure-display-attach.jpg)
+![Enclosure part 2](./doc/LM-top-big-square.stl)
+![Enclosure part 2 - another option](./doc/LM-top-big-round.stl)
 
-The Raspberry Pi mounts above the display, using the standoffs on the right. There are only two mounts for the Pi. 
-![image](./doc/enclosure-pi-attach.jpg)
+The display mounts with four screws, alongside the buttons.
 
-In all cases be careful not to over-tighten. Ensure everything is connected properly. Route the wiring for the 
-paddle/power through the cutout and then up into the group area through the open hole by the steam wand.
+![Top cover with wiring](./doc/lm-bbw-top-cover-wiring.png)
 
-The backplate is designed to mount to the Micra on the right of the machine, using the large screw hole. Optional 8mm
-magnets can be placed to aid installation and help secure the top of the plate.
+![Top cover mounted](./doc/lm-bbw-gray-top.png)
 
-![image](./doc/enclosure-back-mount.jpg)
+---
 
-Then the enclosure hangs on the plate from the top clamshell-style. Once hung, a screw can be inserted to fasten the 
-bottom of the enclosure to the plate.
+## Software installation
 
-![image](./doc/enclosure-mounted.jpg)
+Assumes a Raspberry Pi Debian OS is already installed. **Debian 13 (or newer),
+flashed with Raspberry Pi Imager, is recommended.**
 
-## Software Installation
+### 1. Enable SPI and configure the Pi
 
-It is assumed you have a Raspberry Pi Debian distribution already installed. As of this writing,
-Debian Bullseye is the recommended OS for the Pi Zero 2W. Other versions of Raspberry Pi may also
-work.
+Enable the SPI bus that drives the display:
 
-### Display Driver
-
-The SPI bus must be enabled to drive this display. Log into your Pi and run the following:
-
-```commandline
+```bash
 sudo raspi-config
 ```
 
-Choose Interfacing Options -> SPI -> Yes  to enable the SPI interface
+Choose **Interfacing Options → SPI → Yes**.
 
-Next, we want to release memory from the GPU for system use and thus change / set it to 16M.
-(Note in Debian 11 it was in `raspi-config`, under Performance -> GPU Memory limit)
-```commandline
+Free GPU memory for system use by setting it to 16 MB:
+
+```bash
 sudo nano /boot/firmware/config.txt
 ```
 
-Scroll to the bottom of the file and add, or modify, (best is under section [all]) the following line:
-```commandline
+Add or modify the following line at the bottom (ideally under `[all]`):
+
+```ini
 gpu_mem=16
 ```
 
-Finally, we want to disable the login UI:
-```commandline
+Disable the login UI:
+
+```bash
 sudo raspi-config
 ```
-Under System Options -> Boot / Auto Login choose "Console" 
 
-Reboot the Pi if reboot was not done after exit from `raspi-config`:
-```commandline
+Under **System Options → Boot / Auto Login**, choose **Console**.
+
+Reboot if you have not already:
+
+```bash
 sudo reboot
 ```
 
-### Software dependencies
+### 2. Install dependencies
 
-```commandline
-sudo apt install -y python3-pandas python3-pip libglib2.0-dev git
+```bash
+sudo apt install -y git python3-pip python3-pandas python3-pil \
+    python3-numpy python3-spidev python3-gpiozero python3-rpi.gpio libglib2.0-dev
 sudo pip3 install simplepyble --break-system-packages
 ```
 
-#### LM-BBW Software Installation and Activation
+### 3. Install and start the service
 
-```
+```bash
 git clone https://github.com/george-ags/lm-bbw.git
 cd lm-bbw
 sudo mkdir -p /opt/lm-bbw/web
@@ -222,94 +221,186 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now lm-bbw
 ```
 
-By default, the software scans for any Lunar device in the vicinity and connects to it. There is no simple
-way to set a specific scale MAC address yet.
+By default the software scans for any nearby Lunar and connects to it, then remembers
+that scale's MAC address and reconnects to it on subsequent starts. There is not yet a
+way to pin a specific MAC manually.
 
-#### If it FAILS to start
- - check in Journalctl if Bluetooth adapter is found and it's powered On:
-```commandline
+To update an existing install, re-copy the code and restart:
+
+```bash
+sudo cp -r *.py lib /opt/lm-bbw/ && sudo systemctl restart lm-bbw
+```
+
+---
+
+## Configuration
+
+Settings are environment variables read at startup from `/etc/default/lm-bbw.env`
+(the repo copy is `service/lm-bbw.env`). Edit them either by hand or, more easily,
+through the [web interface](#web-interface). Either way, the service must restart for
+changes to take effect — the web UI does this automatically.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LOGLEVEL` | `INFO` | Logging verbosity (`DEBUG`, `INFO`, `WARNING`, …) |
+| `DISPLAY_ORIENTATION` | `landscape` | Screen orientation: `landscape` or `portrait` |
+| `DISPLAY_BRIGHTNESS` | `100` | Backlight brightness, percent |
+| `REFRESH_RATE` | `0.1` | Main-loop / sampling interval in seconds (~10 Hz) |
+| `GRAPH_HISTORY_SECONDS` | `60` | Seconds of flow history shown on the graph |
+| `GRAPH_MAX_VALUE` | `4` | Top of the graph's y-axis, in g/s |
+| `GRAPH_MAX_DENSITY_THRESHOLD` | `6` | Above this max value, only even gridlines are labelled |
+| `FLOW_SMOOTHING_FACTOR` | `30` | Window size of the centered moving average applied to the flow line |
+| `DRIP_OUT_WINDOW` | `3.5` | Seconds after the shot stops during which weight/graph keep updating for drip-out |
+| `READY_SCREEN_TIMEOUT` | `180` | Idle seconds after which the screen reverts to the logo/ready view (stays connected) |
+| `IDLE_TIMEOUT` | `300` | Idle seconds before full sleep: disconnect the scale and turn the screen off |
+| `SLEEP_PAUSE` | `360` | Seconds to pause Bluetooth scanning after sleeping (lets the scale power off) |
+| `ACTIVITY_WEIGHT_THRESHOLD` | `0.3` | Weight change (g) that counts as user activity for the idle timers |
+| `MEMORY_A_NAME` / `B` / `C` | *(blank)* | Optional label shown instead of `TARGET A/B/C` (e.g. `Espresso`) |
+| `MEMORY_A_COLOR` / `B` / `C` | `#ff1303` / `#25a602` / `#376efa` | Accent color per memory bank |
+
+> Keep `READY_SCREEN_TIMEOUT` ≤ `IDLE_TIMEOUT` so the ready screen appears before the
+> system fully sleeps.
+
+---
+
+## Web interface
+
+The controller serves a small web app on **port 80** (`http://<pi-address>/`):
+
+- **Shot history** — a gallery of saved shot images, newest first.
+- **Configuration editor** — the gear icon (⚙️) opens `/config`, where every setting
+  in the table above can be edited. Saving writes the env file and restarts the
+  service automatically.
+
+---
+
+## Troubleshooting
+
+### Service fails to start — check Bluetooth
+
+Confirm the adapter is found and powered on:
+
+```bash
 bluetoothctl show
 ```
-You should see Powered: yes.
 
-If you have an issue follow the following steps:
-##### Enable Bluetooth adapter
+You should see `Powered: yes`. If not, work through the steps below.
 
-Clear the "Saved" Block State
-Linux remembers if you turned Bluetooth off previously and restores that state on boot. You need to clear this memory.
+### Force the Bluetooth adapter on
 
-Run these commands one by one:
+Linux remembers a previous "blocked" state across reboots; clear it and force the
+adapter on:
 
-Unblock everything physically and via software
-```commandline
+```bash
 sudo rfkill unblock all
-```
-
-Force the bluetooth service to start
-```commandline
 sudo systemctl enable bluetooth
 sudo systemctl start bluetooth
-```
-
-Force power on via the control tool
-```commandline
 sudo bluetoothctl power on
 ```
 
-Add a "Force ON" Boot Rule (The Fix) - add a hardware rule that forces the power ON the moment the chip wakes up.
-Create a new udev rule file:
-```commandline
+Add a boot rule that forces power on as soon as the chip wakes up:
+
+```bash
 sudo nano /etc/udev/rules.d/10-local.rules
 ```
-Paste this exact line into the file:
-```commandline
+
+Add this exact line:
+
+```
 ACTION=="add", KERNEL=="hci0", RUN+="/usr/bin/bluetoothctl power on"
 ```
-Save and exit
 
-Reboot the Pi:
+Save, exit, and reboot:
 
-```commandline
+```bash
 sudo reboot
 ```
 
-Verify
-After the reboot, wait 30 seconds and run:
-```commandline
-bluetoothctl show
-```
-You should see Powered: yes.
+Wait ~30 seconds, then verify again with `bluetoothctl show` (expect `Powered: yes`).
 
-If it still says Powered: no: It means the UART driver for the Pi is failing to load. Check the status of the hardware attachment service and try to troubleshoot:
-```commandline
+If it still says `Powered: no`, the Pi's UART driver is likely failing to load. Check
+the hardware-attach service:
+
+```bash
 sudo systemctl status hciuart
 ```
 
-## Software Development
+---
 
-![image](./doc/design.png)
+## Project notes
 
-### ControlManager
+### Umbra support
 
-This controls the physical devices. It defines buttons, keeps state, and maintains scale connectivity.
+The Acaia Umbra is very similar to the Lunar but has no display or onboard controls,
+which makes it ideal for integrations — it's cheaper, there are no controls to bump,
+and the blank slab looks clean. It also has a sleep mode, so LM-BBW can connect only
+when needed and let the scale sleep when disconnected; you rarely need to touch it
+except to charge or clean.
 
-### Display
+To support this, the former "target lock" toggle was repurposed as a **scale connect**
+button (I never used the lock in over a year). Engaged, it connects to the scale and
+turns the screen on; disengaged, it disconnects and turns the screen off. For a regular
+Lunar, just leave the toggle engaged and continue powering the scale on/off as before.
 
-Display class is responsible for defining how graphics are drawn, and updating the physical display as well as saving
-images of finished shots. It runs in a separate process so that display refreshes aren't blocked on anything else. To
-achieve this, current data is pushed onto a queue which is constantly read from - the queue is drained on each
-refresh and the latest data is displayed.
+### Horizontal display & custom top panel
 
-This was originally using matplotlib, which was CPU intensive and slow. Several other libraries were investigated, but 
-they all had their own drawbacks (dependencies), optimization for webpage viewing, performance etc. In the end it was 
-decided drawing the graph using simple lines was sufficient and performant.
+Part of an effort to build a nicer enclosure that integrates into the Micra's top
+panel. All wiring and setup still applies, except for printing a new top panel and
+using 8 mm push switches in place of the toggle switch for target selection.
 
-### Main loop
+![Top cover](./doc/lm-bbw-top-cover.png)
 
-The main loop is responsible for basic logic of setting up a Display and ControlManager, then orchestrating data
-collection and state updates.
+The "LM-bbw top cover" 3D-printing models are in the `doc` folder.
 
-### Display
+![Top cover wiring](./doc/lm-bbw-top-cover-wiring.png)
 
-A single frame can be generated using `test_display.py` for design changes to the display. Running `pytest` should be
-sufficient to discover this test, run it, and open the resulting image on your workstation.
+I've watched temperatures closely and never seen the Pi throttle while installed.
+Consider printing the top cover in something more heat-resistant such as ABS or ASA. I
+used PLA Carbon Fiber (rated to ~55 °C) for the texture and lined the inside shell with
+a thin layer of neoprene foam; so far the top hasn't exceeded 42 °C. I replaced the top
+cover screws with non-stainless M4-0.7 screws and added 10 mm magnets to hold the cover
+without visible fasteners.
+
+---
+
+## Development
+
+![Design](./doc/design.png)
+
+A high-level architecture overview — processes, threads, the shot lifecycle, the
+display state machine, and the configuration flow — is in
+[LM-BBW_Architecture.md](./LM-BBW_Architecture.md).
+
+### ControlManager (`lib/control.py`)
+
+Owns the physical devices: defines the buttons, holds state (targets, memory banks,
+relay), runs the paddle watchdog, and maintains scale connectivity.
+
+### Display (`lib/display.py`)
+
+Defines how the screen is drawn, updates the physical display, and saves images of
+finished shots. It runs in a separate process so rendering never blocks control or
+Bluetooth logic — the main loop pushes the latest data onto a queue, which the display
+process drains each refresh. Graph rendering uses simple lines (a deliberate choice
+after matplotlib proved too CPU-heavy and other libraries had their own drawbacks).
+
+### Main loop (`lm-bbw.py`)
+
+Sets up the Display and ControlManager, then orchestrates data collection, the
+target-weight cutoff, overshoot learning, and state updates.
+
+### Generating a test frame
+
+A single frame can be generated with `test_display.py` for display design changes.
+Running `pytest` should discover and run it and open the resulting image on your
+workstation.
+
+---
+
+## Credits & license
+
+- Inspired by and originally based on [Apollo](https://github.com/mlsorensen/apollo) by Marcus Sorensen.
+- The WaveShare LCD drivers (`lib/lcdconfig.py`, `lib/LCD_2inch*.py`) are by the WaveShare team and retain their original MIT license.
+
+This is a personal hobby project provided as-is, without warranty. If you intend to
+redistribute it, please add an explicit project license.
