@@ -38,11 +38,17 @@ class GalleryHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
     """
     Custom handler that displays an image gallery and a configuration editor.
     """
-    
+
+    # Injected by _create_handler(); defaults keep attribute access safe.
+    control_manager = None
+    scale = None
+
     def do_GET(self):
         # Intercept the /config route
         if self.path == '/config':
             self.send_config_page()
+        elif self.path == '/scan' or self.path.startswith('/scan?'):
+            self.send_scan_page()
         else:
             # Fall back to standard file serving / gallery listing
             super().do_GET()
@@ -77,8 +83,160 @@ class GalleryHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
             # Delay the restart by 1 second so the browser has time to receive the success page
             logging_cmd = "systemctl restart lm-bbw &"
             threading.Timer(1.0, lambda: os.system(logging_cmd)).start()
+        elif self.path == '/scan':
+            content_length = int(self.headers.get('Content-Length', 0))
+            post_data = self.rfile.read(content_length).decode('utf-8') if content_length else ''
+            form = urllib.parse.parse_qs(post_data, keep_blank_values=True)
+            mgr = self.control_manager
+
+            if mgr is None:
+                # No controller wired in — shouldn't happen in normal operation.
+                self.send_scan_page()
+                return
+
+            if 'do_scan' in form:
+                # Blocking BLE scan (a few seconds), serialized inside the manager.
+                try:
+                    mgr.scan_for_scales(timeout=4)
+                except Exception as e:
+                    print(f"Scan error: {e}")
+                self.send_scan_page()
+                return
+
+            if 'selected_mac' in form:
+                choice = form['selected_mac'][0].strip()
+                if choice == '' or choice == 'AUTO':
+                    mgr.clear_pinned_scale()
+                else:
+                    mgr.select_scale(choice)
+                    # Drop a different connected scale so we reconnect to the chosen one.
+                    try:
+                        if self.scale is not None and self.scale.connected and self.scale.mac != choice:
+                            self.scale.disconnect()
+                    except Exception as e:
+                        print(f"Disconnect-on-select error: {e}")
+                self.send_scan_saved_page(choice)
+                return
+
+            self.send_scan_page()
         else:
             self.send_error(http.HTTPStatus.NOT_FOUND, "Not Found")
+
+    def send_scan_page(self):
+        enc = sys.getfilesystemencoding()
+        title = 'Bluetooth Scale Setup'
+        mgr = self.control_manager
+
+        pinned = getattr(mgr, 'pinned_mac', None) if mgr else None
+        results = mgr.get_scan_results() if mgr else []
+
+        r = []
+        r.append('<!DOCTYPE html>')
+        r.append('<html><head>')
+        r.append(f'<title>{title}</title>')
+        r.append('<meta name="viewport" content="width=device-width, initial-scale=1">')
+        r.append('<meta http-equiv="Content-Type" content="text/html; charset=utf-8">')
+        r.append('<style>')
+        r.append('body { font-family: sans-serif; background: #222; color: #eee; margin: 0; padding: 20px; }')
+        r.append('.container { max-width: 600px; margin: 0 auto; background: #333; padding: 30px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }')
+        r.append('h2 { margin-top: 0; color: #fff; border-bottom: 1px solid #555; padding-bottom: 10px; }')
+        r.append('.current { background: #2b2b2b; border: 1px solid #555; border-radius: 6px; padding: 12px 15px; margin-bottom: 20px; }')
+        r.append('.current b { color: #88c0d0; }')
+        r.append('.device { display: block; background: #444; border: 1px solid #555; border-radius: 6px; padding: 12px 15px; margin-bottom: 10px; cursor: pointer; }')
+        r.append('.device:hover { border-color: #88c0d0; }')
+        r.append('.device input { margin-right: 10px; }')
+        r.append('.dev-name { font-weight: bold; }')
+        r.append('.dev-mac { color: #aaa; font-family: monospace; font-size: 0.85em; }')
+        r.append('.btn { display: inline-block; background: #81a1c1; color: #2e3440; padding: 12px 24px; border: none; border-radius: 4px; cursor: pointer; font-size: 1em; font-weight: bold; text-decoration: none; transition: background 0.2s; }')
+        r.append('.btn:hover { background: #88c0d0; }')
+        r.append('.btn-secondary { background: #4c566a; color: #eceff4; }')
+        r.append('.btn-secondary:hover { background: #434c5e; }')
+        r.append('.help-text { font-size: 0.85em; color: #aaa; margin-top: 5px; margin-bottom: 20px; }')
+        r.append('form { margin: 0; }')
+        r.append('.row { margin-top: 25px; display: flex; gap: 10px; align-items: center; }')
+        r.append('</style>')
+        r.append('</head><body>')
+        r.append('<div class="container">')
+        r.append(f'<h2>{title}</h2>')
+
+        if mgr is None:
+            r.append('<p style="color:#bf616a;">Scale control is not available.</p>')
+            r.append('<a href="/" class="btn btn-secondary">Back</a>')
+            r.append('</div></body></html>')
+            self._write_html(r, enc)
+            return
+
+        # Current selection
+        if pinned:
+            r.append(f'<div class="current">Currently selected scale: <b>{html.escape(pinned)}</b><br>'
+                     '<span class="help-text">Only this scale will be connected; others are ignored.</span></div>')
+        else:
+            r.append('<div class="current">Scale selection: <b>Automatic</b><br>'
+                     '<span class="help-text">Connects to the first Acaia scale found nearby.</span></div>')
+
+        # Scan trigger
+        r.append('<form method="POST" action="/scan">')
+        r.append('<input type="hidden" name="do_scan" value="1">')
+        r.append('<button type="submit" class="btn">🔄 Scan for scales</button>')
+        r.append('</form>')
+        r.append('<p class="help-text">Scanning takes a few seconds. A scale that is already '
+                 'connected may not appear in the list (it is not advertising while connected).</p>')
+
+        # Results + selection
+        r.append('<form method="POST" action="/scan">')
+        if results:
+            r.append('<div style="margin-top:15px;">')
+            for name, mac in results:
+                checked = ' checked' if pinned and mac == pinned else ''
+                r.append('<label class="device">'
+                         f'<input type="radio" name="selected_mac" value="{html.escape(mac)}"{checked}>'
+                         f'<span class="dev-name">{html.escape(name)}</span><br>'
+                         f'<span class="dev-mac">{html.escape(mac)}</span>'
+                         '</label>')
+            auto_checked = '' if pinned else ' checked'
+            r.append('<label class="device">'
+                     f'<input type="radio" name="selected_mac" value="AUTO"{auto_checked}>'
+                     '<span class="dev-name">Automatic (use any nearby scale)</span>'
+                     '</label>')
+            r.append('</div>')
+            r.append('<div class="row">')
+            r.append('<button type="submit" class="btn">Use selected scale</button>')
+            r.append('<a href="/" class="btn btn-secondary">Back</a>')
+            r.append('</div>')
+        else:
+            r.append('<p class="help-text">No scan results yet. Press "Scan for scales" to look for devices.</p>')
+            r.append('<a href="/" class="btn btn-secondary">Back</a>')
+        r.append('</form>')
+
+        r.append('</div></body></html>')
+        self._write_html(r, enc)
+
+    def send_scan_saved_page(self, choice):
+        enc = sys.getfilesystemencoding()
+        if choice == '' or choice == 'AUTO':
+            msg = 'Scale selection cleared. The system will connect to any nearby Acaia scale.'
+        else:
+            msg = f'Scale {html.escape(choice)} selected. Only this scale will be used from now on.'
+        r = []
+        r.append('<!DOCTYPE html>')
+        r.append('<html><head>')
+        r.append('<meta http-equiv="refresh" content="2;url=/scan" />')
+        r.append('<meta name="viewport" content="width=device-width, initial-scale=1">')
+        r.append('<style>body { font-family: sans-serif; background: #222; color: #eee; text-align: center; padding-top: 100px; }</style>')
+        r.append('</head><body>')
+        r.append('<h2>Saved</h2>')
+        r.append(f'<p>{msg}</p>')
+        r.append('<p style="color:#aaa;">Returning to setup…</p>')
+        r.append('</body></html>')
+        self._write_html(r, enc)
+
+    def _write_html(self, parts, enc):
+        encoded = ''.join(parts).encode(enc, 'surrogateescape')
+        self.send_response(http.HTTPStatus.OK)
+        self.send_header("Content-type", "text/html; charset=%s" % enc)
+        self.send_header("Content-Length", str(len(encoded)))
+        self.end_headers()
+        self.wfile.write(encoded)
 
     def send_config_page(self):
         enc = sys.getfilesystemencoding()
@@ -239,10 +397,13 @@ class GalleryHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
         r.append('.nav a { font-size: 1.2em; display: inline-block; padding: 10px 20px; background: #444; border-radius: 5px; }')
         r.append('.settings-icon { position: absolute; top: 20px; right: 25px; font-size: 2.2em; text-decoration: none; transition: transform 0.2s; }')
         r.append('.settings-icon:hover { transform: rotate(45deg); text-decoration: none; }')
+        r.append('.scale-icon { position: absolute; top: 20px; right: 75px; font-size: 2.2em; text-decoration: none; transition: transform 0.2s; }')
+        r.append('.scale-icon:hover { transform: scale(1.15); text-decoration: none; }')
         r.append('</style>')
         r.append('</head><body>')
         
-        # --- GEAR ICON INJECTED HERE ---
+        # --- GEAR ICON + SCALE SETUP ICON INJECTED HERE ---
+        r.append('<a href="/scan" class="scale-icon" title="Bluetooth Scale Setup">📶</a>')
         r.append('<a href="/config" class="settings-icon" title="Edit Configuration">⚙️</a>')
         # -------------------------------
 
@@ -293,23 +454,30 @@ class GalleryHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         return f
 
-def _create_handler(directory):
+def _create_handler(directory, control_manager=None, scale=None):
     def _init(self, *args, **kwargs):
         return GalleryHTTPRequestHandler.__init__(self, *args, directory=self.directory, **kwargs)
         
     return type(f'GalleryHandlerFrom<{directory}>',
                 (GalleryHTTPRequestHandler,),
-                {'__init__': _init, 'directory': directory})
+                {'__init__': _init,
+                 'directory': directory,
+                 'control_manager': control_manager,
+                 'scale': scale})
 
 class WebServer:
-    def __init__(self, directory: str, port: int):
+    def __init__(self, directory: str, port: int, control_manager=None, scale=None):
         self.port = port
         self.directory = directory
+        self.control_manager = control_manager
+        self.scale = scale
 
     def start(self):
         thread.start_new_thread(self._create_server, ())
 
     def _create_server(self):
-        handler = _create_handler(directory=self.directory)
+        handler = _create_handler(directory=self.directory,
+                                  control_manager=self.control_manager,
+                                  scale=self.scale)
         server = http.server.ThreadingHTTPServer(("", self.port), handler)
         server.serve_forever()

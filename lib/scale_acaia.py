@@ -29,12 +29,14 @@ def normalize_uuid(uuid_str):
     return uuid_str.lower().replace('-', '')
 
 # --- SCANNING FUNCTION ---
-def find_acaia_devices(timeout=1) -> List[str]:
+def find_acaia_devices(timeout=1) -> List[Tuple[str, str]]:
     """
     Scans for Acaia devices using SimplePyBLE.
     Blocking call for 'timeout' seconds.
+    Returns a list of (name, address) tuples, deduplicated by address.
     """
     found_devs = []
+    seen_addrs = set()
     target_names = ['ACAIA', 'PYXIS', 'UMBRA', 'LUNAR', 'PROCH']
     
     try:
@@ -55,8 +57,11 @@ def find_acaia_devices(timeout=1) -> List[str]:
                 name = p.identifier()
                 addr = p.address()
                 if name and any(name.upper().startswith(t) for t in target_names):
+                    if addr in seen_addrs:
+                        continue
+                    seen_addrs.add(addr)
                     logging.info(f"Scan Found: {name} [{addr}]")
-                    found_devs.append(addr)
+                    found_devs.append((name, addr))
             except Exception:
                 continue
                 

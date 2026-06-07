@@ -16,6 +16,9 @@ from lib.scale_acaia import AcaiaScale, find_acaia_devices
 default_target = 36.0
 default_overshoot = 1.0
 memory_save_file = "memory.save"
+# User-selected scale MAC (relative to WorkingDirectory, i.e. /opt/lm-bbw).
+# When present, only this scale is connected; others are ignored.
+pinned_scale_file = "scale.pinned"
 
 # --- Overshoot learning (adaptive "cut early" margin) ---
 OVERSHOOT_LEARNING_RATE = 0.5    # fraction of each shot's error absorbed (EMA gain)
@@ -118,6 +121,20 @@ class ControlManager:
         # ASYNC SCANNER VARIABLES
         self.discovered_mac: Optional[str] = None
         self.scale_is_connected_flag = False
+
+        # --- SCALE SELECTION (pinning) ---
+        # When pinned_mac is set, ONLY that scale is connected; other Acaia
+        # devices nearby are ignored. None = automatic (connect to first found).
+        self.pinned_mac: Optional[str] = None
+        # Serializes BLE discovery scans between the background scanner thread
+        # and a web-triggered manual scan so they don't run on the adapter at once.
+        self._ble_scan_lock = threading.Lock()
+        # Results + state for the web "scan & select" page.
+        self._scan_state_lock = threading.Lock()
+        self.scan_results = []          # list of (name, address)
+        self.scan_in_progress = False
+        self.scan_completed_at = 0.0
+        self._load_pinned_mac()
 
         self.load_memory()
 
@@ -276,11 +293,21 @@ class ControlManager:
             # ----------------------------------
 
             if self.should_scale_connect() and not self.scale_is_connected_flag and self.discovered_mac is None:
+
+                # If a scale is pinned, target ONLY it — never scan for or
+                # auto-pick a different device.
+                if self.pinned_mac:
+                    self.discovered_mac = self.pinned_mac
+                    time.sleep(1)
+                    continue
+
                 try:
-                    devices = find_acaia_devices(timeout=1)
+                    with self._ble_scan_lock:
+                        devices = find_acaia_devices(timeout=1)
                     if devices:
-                        self.discovered_mac = devices[0]
-                        logging.info("Scanner found Scale: %s (Handing over to Main Thread)" % self.discovered_mac)
+                        name, addr = devices[0]
+                        self.discovered_mac = addr
+                        logging.info("Scanner found Scale: %s [%s] (Handing over to Main Thread)" % (name, addr))
                         time.sleep(1)
                     else:
                         time.sleep(6)
@@ -368,6 +395,82 @@ class ControlManager:
 
     def should_scale_connect(self) -> bool:
         return self.scale_connect_button.value
+
+    # ---------------- Scale selection / pinning ----------------
+
+    def _load_pinned_mac(self):
+        """Load a previously selected scale MAC, if any."""
+        try:
+            if os.path.exists(pinned_scale_file):
+                with open(pinned_scale_file, 'r') as f:
+                    mac = f.read().strip()
+                if len(mac) > 10:
+                    self.pinned_mac = mac
+                    self.discovered_mac = mac
+                    logging.info("Loaded pinned scale: %s" % mac)
+        except Exception as e:
+            logging.error("Failed to load pinned scale: %s" % e)
+
+    def _persist_pinned_mac(self, mac):
+        """Write the selected MAC to disk, or remove the file to clear it."""
+        try:
+            if mac:
+                with open(pinned_scale_file, 'w') as f:
+                    f.write(mac)
+            elif os.path.exists(pinned_scale_file):
+                os.remove(pinned_scale_file)
+        except Exception as e:
+            logging.error("Failed to persist pinned scale: %s" % e)
+
+    def select_scale(self, mac: str):
+        """
+        Pin a specific scale. From now on only this MAC is connected; other
+        Acaia devices are ignored. Persists across restarts.
+        """
+        mac = (mac or "").strip()
+        if len(mac) <= 10:
+            logging.warning("select_scale ignored invalid MAC: %r" % mac)
+            return
+        self.pinned_mac = mac
+        self.discovered_mac = mac          # target it on the next connect cycle
+        self._persist_pinned_mac(mac)
+        self._activity_detected()
+        logging.info("Scale pinned: %s" % mac)
+
+    def clear_pinned_scale(self):
+        """Forget the pinned scale and return to automatic discovery."""
+        self.pinned_mac = None
+        self._persist_pinned_mac(None)
+        self._activity_detected()
+        logging.info("Scale selection cleared -> automatic discovery")
+
+    def scan_for_scales(self, timeout=4):
+        """
+        Perform a one-shot BLE scan for Acaia scales and cache the results.
+        Serialized with the background scanner via _ble_scan_lock. Blocking
+        for roughly 'timeout' seconds. Returns a list of (name, address).
+        """
+        with self._scan_state_lock:
+            self.scan_in_progress = True
+        results = []
+        try:
+            with self._ble_scan_lock:
+                results = find_acaia_devices(timeout=timeout)
+        except Exception as e:
+            logging.error("Manual scan failed: %s" % e)
+        with self._scan_state_lock:
+            self.scan_results = results
+            self.scan_in_progress = False
+            self.scan_completed_at = timer()
+        logging.info("Manual scan found %d scale(s)" % len(results))
+        return results
+
+    def get_scan_results(self):
+        """Return the cached results of the last manual scan: [(name, mac), ...]."""
+        with self._scan_state_lock:
+            return list(self.scan_results)
+
+    # -----------------------------------------------------------
 
     def relay_on(self) -> bool:
         return self.relay.value

@@ -105,10 +105,6 @@ def check_target_disable_relay(scale: AcaiaScale, mgr: ControlManager):
 
 
 def main():
-    web_server = WebServer(WEB_DIR, WEB_PORT)
-    web_server.start()
-    logging.info("Started web server")
-
     display_data_queue: Queue[DisplayData] = Queue()
     display = Display(display_data_queue, display_size=DisplaySize.SIZE_2_0, image_save_dir=WEB_DIR)
     display.start()
@@ -121,11 +117,23 @@ def main():
 
     scale = AcaiaScale(mac='')
 
-    last_mac = load_last_mac()
-    if last_mac:
-        mgr.discovered_mac = last_mac
+    # Scale selection: a pinned scale (chosen via the web setup page) wins and
+    # is the only device we connect to. Otherwise fall back to the last-known
+    # auto-remembered MAC.
+    if mgr.pinned_mac:
+        logging.info("Pinned scale in use: %s" % mgr.pinned_mac)
+    else:
+        last_mac = load_last_mac()
+        if last_mac:
+            mgr.discovered_mac = last_mac
 
     mgr.add_tare_handler(lambda: scale.tare())
+
+    # Start the web server now that mgr + scale exist, so the setup page can
+    # trigger scans and pin a scale.
+    web_server = WebServer(WEB_DIR, WEB_PORT, control_manager=mgr, scale=scale)
+    web_server.start()
+    logging.info("Started web server")
 
     last_sample_time: Optional[float] = None
     last_weight: Optional[float] = None
