@@ -1,22 +1,17 @@
 # LM-BBW — Architecture & Flow
 
-Diagrams describing how the brew-by-weight controller is structured and how a shot
-flows through it. All diagrams are [Mermaid](https://mermaid.js.org/) and render
-directly on GitHub.
+Diagrams describing how the brew-by-weight controller is structured and how a shot flows through it. All diagrams are [Mermaid](https://mermaid.js.org/) and render directly on GitHub.
 
 ---
 
 ## 1. Components, processes & threads
 
-The system is one **main process** (with several background threads) plus a
-separate **display process**, communicating over a `multiprocessing.Queue`. The
-display is isolated in its own process so frame rendering and SPI writes never
-block control or Bluetooth logic.
+The system is one **main process** (with several background threads) plus a separate **display process**, communicating over a `multiprocessing.Queue`. The display is isolated in its own process so frame rendering and SPI writes never block control or Bluetooth logic.
 
 ```mermaid
 flowchart TB
     subgraph HW["Hardware"]
-        SCALE["Acaia Lunar / Pyxis / Umbra<br/>(Bluetooth LE)"]
+        SCALE["Acaia (Lunar/Pyxis/Umbra) or<br/>BooKoo (Ultra/Mini) — Bluetooth LE"]
         PADDLE["Micra paddle switch<br/>GPIO 20"]
         BTNS["Buttons: tare, memory, connect,<br/>target up / down (GPIO)"]
         RELAY["Relay -> Micra brew circuit<br/>GPIO 26"]
@@ -29,17 +24,18 @@ flowchart TB
 
         subgraph CM["ControlManager — control.py"]
             WD["Watchdog thread<br/>paddle start / stop + safety latch"]
-            SCAN["BLE scan thread<br/>find scale MAC"]
+            SCAN["BLE scan thread<br/>find + classify scale"]
             CB["gpiozero button<br/>callback threads"]
         end
 
-        subgraph SC["AcaiaScale — scale_acaia.py"]
+        subgraph SC["Scale wrapper — scales.py"]
+            DRV["Active driver:<br/>scale_acaia / scale_bookoo"]
             CONN["connect thread"]
-            HB["heartbeat thread (2s)"]
+            HB["heartbeat / watchdog thread"]
             NOTIF["BLE notify handler<br/>weight / battery"]
         end
 
-        WEB["WebServer thread<br/>:80 — shot gallery + /config"]
+        WEB["WebServer thread<br/>:80 — gallery + /config + /scan"]
     end
 
     subgraph DISP["Display process — display.py"]
@@ -68,8 +64,8 @@ flowchart TB
 
 - **Main loop** orchestrates everything at `REFRESH_RATE` (~0.1 s): checks sleep, keeps the scale connected, evaluates the target cutoff, and pushes a `DisplayData` snapshot onto the queue.
 - **Watchdog thread** polls the paddle to start/stop shots and enforces the debounce + release latch (the emergency stop path).
-- **BLE scan thread** searches for the scale's MAC and hands it to the main thread to connect (keeps BlueZ from being hammered).
-- **Scale threads** (connect / heartbeat / notify) live inside `AcaiaScale`; the notify handler updates `weight`/`battery` asynchronously.
+- **BLE scan thread** searches for a supported scale, classifies it by vendor, and hands it to the main thread to connect. Every BLE scan (discovery, the web scan, and each driver's connect-scan) is serialized through one lock in `lib/ble.py` so the adapter is never scanned by two paths at once.
+- **Scale wrapper** (`scales.py`) holds the active vendor driver (`scale_acaia` or `scale_bookoo`) behind a common interface; the driver's connect / heartbeat / notify threads update `weight`/`battery` asynchronously.
 - **Display process** is fully separate; it drains the queue to the latest frame and only redraws when the picture actually changes.
 
 ---
@@ -111,8 +107,7 @@ flowchart TD
 
 ## 3. Display screen state machine
 
-What the LCD shows, and the transitions between states. The render loop applies
-these from the `DisplayData` stream plus its own timers.
+What the LCD shows, and the transitions between states. The render loop applies these from the `DisplayData` stream plus its own timers.
 
 ```mermaid
 stateDiagram-v2
@@ -140,8 +135,7 @@ stateDiagram-v2
 
 ## 4. Configuration flow
 
-Settings live in environment variables. The web UI edits the env file and
-restarts the service; values are read once at startup.
+Settings live in environment variables. The web UI edits the env file and restarts the service; values are read once at startup.
 
 ```mermaid
 flowchart LR
@@ -153,9 +147,7 @@ flowchart LR
     ENV -.->|"os.environ at startup"| APP
 ```
 
-> The web server's `ENV_FILE_PATH` and the unit's `EnvironmentFile=` must point at
-> the **same** file (`/etc/default/lm-bbw.env`), or saved changes won't reach the
-> running service.
+> The web server's `ENV_FILE_PATH` and the unit's `EnvironmentFile=` must point at the **same** file (`/etc/default/lm-bbw.env`), or saved changes won't reach the running service.
 
 ---
 
@@ -164,10 +156,13 @@ flowchart LR
 | File | Role |
 |------|------|
 | `lm-bbw.py` | Entry point; main loop, shot cutoff logic, overshoot learning, wiring |
-| `lib/control.py` | `ControlManager`: buttons, relay, watchdog, scale connectivity, memory banks, sleep/ready timers |
+| `lib/control.py` | `ControlManager`: buttons, relay, watchdog, scale connectivity + selection/pinning, memory banks, sleep/ready timers |
+| `lib/scales.py` | Vendor-neutral layer: combined scan + classification, factory, and the `Scale` wrapper that delegates to a backend |
 | `lib/scale_acaia.py` | `AcaiaScale`: BLE scan/connect/heartbeat, Acaia protocol decode |
+| `lib/scale_bookoo.py` | `BookooScale`: BLE connect, BooKoo Ultra/Mini protocol decode |
+| `lib/ble.py` | Single lock serializing all BLE adapter scans |
 | `lib/display.py` | Display process: frame rendering, graph, screen states, image saving |
-| `lib/webserver.py` | Shot-history gallery + `/config` editor |
+| `lib/webserver.py` | Shot-history gallery + `/config` editor + `/scan` scale setup |
 | `lib/lcdconfig.py`, `lib/LCD_2inch*.py` | WaveShare SPI LCD drivers |
 | `service/lm-bbw.service` | systemd unit |
 | `service/lm-bbw.env` | default configuration |

@@ -14,7 +14,7 @@ from typing import Optional
 from lib import control
 from lib.control import ControlManager
 from lib.display import Display, DisplayData, DisplaySize
-from lib.scale_acaia import AcaiaScale
+from lib.scales import Scale
 from lib.webserver import WebServer
 
 WEB_PORT = 80
@@ -57,27 +57,33 @@ logging.basicConfig(
     handlers=handlers
 )
 
-def save_mac_address(mac):
+def save_mac_address(mac, vendor=None):
     try:
         with open(MAC_SAVE_FILE, 'w') as f:
-            f.write(mac)
-            logging.info(f"Saved Scale MAC {mac} to disk")
+            f.write("%s,%s" % (vendor or 'acaia', mac))
+            logging.info(f"Saved Scale {mac} [{vendor}] to disk")
     except Exception as e:
         logging.error(f"Failed to save MAC: {e}")
 
 def load_last_mac():
+    """Returns (mac, vendor) or (None, None). Accepts legacy bare-MAC files."""
     try:
         if os.path.exists(MAC_SAVE_FILE):
             with open(MAC_SAVE_FILE, 'r') as f:
-                mac = f.read().strip()
-                if len(mac) > 10:
-                    logging.info(f"Loaded Last Known MAC: {mac}")
-                    return mac
+                raw = f.read().strip()
+            if ',' in raw:
+                vendor, mac = raw.split(',', 1)
+                vendor, mac = vendor.strip(), mac.strip()
+            else:
+                vendor, mac = 'acaia', raw
+            if len(mac) > 10:
+                logging.info(f"Loaded Last Known Scale: {mac} [{vendor}]")
+                return mac, vendor
     except Exception as e:
         logging.error(f"Failed to load MAC: {e}")
-    return None
+    return None, None
 
-def update_overshoot(scale: AcaiaScale, mgr: ControlManager):
+def update_overshoot(scale, mgr: ControlManager):
     if mgr.shot_time_elapsed() < MIN_GOOD_SHOT_DURATION:
         logging.info("Declining to consider short shot as a good shot. Not updating overshoot value or saving image")
         return
@@ -90,7 +96,7 @@ def update_overshoot(scale: AcaiaScale, mgr: ControlManager):
 
 SHOT_TIMEOUT_SECONDS = 60.0
 
-def check_target_disable_relay(scale: AcaiaScale, mgr: ControlManager):
+def check_target_disable_relay(scale: Scale, mgr: ControlManager):
     if mgr.shot_time_elapsed() < 1.5:
         return
 
@@ -115,17 +121,20 @@ def main():
     mgr = ControlManager(max_flow_points=max_points)
     # ----------------------------------------------------------
 
-    scale = AcaiaScale(mac='')
+    scale = Scale()
 
     # Scale selection: a pinned scale (chosen via the web setup page) wins and
     # is the only device we connect to. Otherwise fall back to the last-known
-    # auto-remembered MAC.
+    # auto-remembered scale (MAC + vendor).
+    last_mac = None
     if mgr.pinned_mac:
-        logging.info("Pinned scale in use: %s" % mgr.pinned_mac)
+        logging.info("Pinned scale in use: %s [%s]" % (mgr.pinned_mac, mgr.pinned_vendor))
+        last_mac = mgr.pinned_mac
     else:
-        last_mac = load_last_mac()
+        last_mac, last_vendor = load_last_mac()
         if last_mac:
             mgr.discovered_mac = last_mac
+            mgr.discovered_vendor = last_vendor
 
     mgr.add_tare_handler(lambda: scale.tare())
 
@@ -148,7 +157,7 @@ def main():
         is_connected = control.try_connect_scale(scale, mgr)
         
         if is_connected and scale.mac and scale.mac != last_mac:
-            save_mac_address(scale.mac)
+            save_mac_address(scale.mac, scale.vendor)
             last_mac = scale.mac
 
         relay_is_on = mgr.relay_on()
@@ -200,7 +209,7 @@ def main():
     logging.info("Exiting on stop")
 
 
-def update_display(scale: AcaiaScale, mgr: ControlManager, display: Display, last_time: float, last_weight: float, timeout_stop: bool = False, force_ready: bool = False) -> (float, float):
+def update_display(scale: Scale, mgr: ControlManager, display: Display, last_time: float, last_weight: float, timeout_stop: bool = False, force_ready: bool = False) -> (float, float):
     now = timer()
     weight = scale.weight
     sample_rate = 0.0

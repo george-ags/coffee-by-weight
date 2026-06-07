@@ -10,6 +10,8 @@ import struct
 import gc
 from typing import Optional, List, Tuple
 
+from lib.ble import adapter_scan_lock
+
 try:
     import simplepyble
 except ImportError:
@@ -28,6 +30,9 @@ PYXIS_CMD_UUID = "49535343-8841-43f4-a8d4-ecbe34729bb3"
 def normalize_uuid(uuid_str):
     return uuid_str.lower().replace('-', '')
 
+# Name prefixes Acaia scales advertise with.
+ACAIA_NAME_PREFIXES = ['ACAIA', 'PYXIS', 'UMBRA', 'LUNAR', 'PROCH']
+
 # --- SCANNING FUNCTION ---
 def find_acaia_devices(timeout=1) -> List[Tuple[str, str]]:
     """
@@ -37,7 +42,7 @@ def find_acaia_devices(timeout=1) -> List[Tuple[str, str]]:
     """
     found_devs = []
     seen_addrs = set()
-    target_names = ['ACAIA', 'PYXIS', 'UMBRA', 'LUNAR', 'PROCH']
+    target_names = ACAIA_NAME_PREFIXES
     
     try:
         adapters = simplepyble.Adapter.get_adapters()
@@ -48,9 +53,9 @@ def find_acaia_devices(timeout=1) -> List[Tuple[str, str]]:
         adapter = adapters[0]
         
         # SimplePyBLE scan is blocking
-        adapter.scan_for(timeout * 1000) 
-        
-        peripherals = adapter.scan_get_results()
+        with adapter_scan_lock:
+            adapter.scan_for(timeout * 1000)
+            peripherals = adapter.scan_get_results()
         
         for p in peripherals:
             try:
@@ -247,8 +252,9 @@ class AcaiaScale(object):
             for attempt in range(3):
                 try:
                     logging.info(f"Scanning to acquire peripheral {self.mac} (Attempt {attempt+1})...")
-                    self.adapter.scan_for(2000) 
-                    peripherals = self.adapter.scan_get_results()
+                    with adapter_scan_lock:
+                        self.adapter.scan_for(2000)
+                        peripherals = self.adapter.scan_get_results()
                     
                     for p in peripherals:
                         if p.address() == self.mac:

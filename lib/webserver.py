@@ -7,6 +7,8 @@ import io
 import sys
 import threading
 
+from lib.scales import vendor_label
+
 # Pointing to the systemd environment file
 ENV_FILE_PATH = '/etc/default/lm-bbw.env'
 
@@ -104,18 +106,28 @@ class GalleryHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
                 return
 
             if 'selected_mac' in form:
-                choice = form['selected_mac'][0].strip()
-                if choice == '' or choice == 'AUTO':
+                raw = form['selected_mac'][0].strip()
+                if raw == '' or raw == 'AUTO':
                     mgr.clear_pinned_scale()
+                    self.send_scan_saved_page('AUTO')
+                    return
+                # Radio values are "vendor|mac" for recognized scales, or a bare
+                # "mac" for unrecognized devices (then use the fallback dropdown).
+                if '|' in raw:
+                    vendor, mac = raw.split('|', 1)
                 else:
-                    mgr.select_scale(choice)
-                    # Drop a different connected scale so we reconnect to the chosen one.
-                    try:
-                        if self.scale is not None and self.scale.connected and self.scale.mac != choice:
-                            self.scale.disconnect()
-                    except Exception as e:
-                        print(f"Disconnect-on-select error: {e}")
-                self.send_scan_saved_page(choice)
+                    mac = raw
+                    vendor = (form.get('fallback_vendor', ['']) or [''])[0]
+                vendor = (vendor or '').strip() or None
+                mac = mac.strip()
+                mgr.select_scale(mac, vendor)
+                # Drop a different connected scale so we reconnect to the chosen one.
+                try:
+                    if self.scale is not None and self.scale.connected and self.scale.mac != mac:
+                        self.scale.disconnect()
+                except Exception as e:
+                    print(f"Disconnect-on-select error: {e}")
+                self.send_scan_saved_page(mac)
                 return
 
             self.send_scan_page()
@@ -128,7 +140,19 @@ class GalleryHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
         mgr = self.control_manager
 
         pinned = getattr(mgr, 'pinned_mac', None) if mgr else None
+        pinned_vendor = getattr(mgr, 'pinned_vendor', None) if mgr else None
         results = mgr.get_scan_results() if mgr else []
+
+        # Live connection state (a connected scale stops advertising, so it
+        # won't appear in scan results — we surface it explicitly instead).
+        conn_mac = None
+        conn_vendor = None
+        try:
+            if self.scale is not None and self.scale.connected and self.scale.mac:
+                conn_mac = self.scale.mac
+                conn_vendor = getattr(self.scale, 'vendor', None)
+        except Exception:
+            conn_mac = None
 
         r = []
         r.append('<!DOCTYPE html>')
@@ -147,6 +171,7 @@ class GalleryHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
         r.append('.device input { margin-right: 10px; }')
         r.append('.dev-name { font-weight: bold; }')
         r.append('.dev-mac { color: #aaa; font-family: monospace; font-size: 0.85em; }')
+        r.append('.dev-vendor { color: #2e3440; background: #88c0d0; border-radius: 3px; padding: 1px 6px; font-size: 0.75em; }')
         r.append('.btn { display: inline-block; background: #81a1c1; color: #2e3440; padding: 12px 24px; border: none; border-radius: 4px; cursor: pointer; font-size: 1em; font-weight: bold; text-decoration: none; transition: background 0.2s; }')
         r.append('.btn:hover { background: #88c0d0; }')
         r.append('.btn-secondary { background: #4c566a; color: #eceff4; }')
@@ -168,44 +193,102 @@ class GalleryHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
 
         # Current selection
         if pinned:
-            r.append(f'<div class="current">Currently selected scale: <b>{html.escape(pinned)}</b><br>'
+            r.append(f'<div class="current">Currently selected scale: '
+                     f'<b>{html.escape(pinned)}</b> '
+                     f'<span class="dev-vendor">{html.escape(vendor_label(pinned_vendor))}</span><br>'
                      '<span class="help-text">Only this scale will be connected; others are ignored.</span></div>')
         else:
             r.append('<div class="current">Scale selection: <b>Automatic</b><br>'
-                     '<span class="help-text">Connects to the first Acaia scale found nearby.</span></div>')
+                     '<span class="help-text">Connects to the first supported scale found nearby.</span></div>')
+
+        # Currently connected (live)
+        if conn_mac:
+            r.append(f'<div class="current" style="border-color:#a3be8c;">Currently connected: '
+                     f'<b>{html.escape(conn_mac)}</b> '
+                     f'<span class="dev-vendor">{html.escape(vendor_label(conn_vendor))}</span><br>'
+                     '<span class="help-text">This is the scale connected right now. You can pin it below '
+                     'so the system always reconnects to it.</span></div>')
 
         # Scan trigger
         r.append('<form method="POST" action="/scan">')
         r.append('<input type="hidden" name="do_scan" value="1">')
         r.append('<button type="submit" class="btn">🔄 Scan for scales</button>')
         r.append('</form>')
-        r.append('<p class="help-text">Scanning takes a few seconds. A scale that is already '
-                 'connected may not appear in the list (it is not advertising while connected).</p>')
+        r.append('<p class="help-text">Scanning takes a few seconds. The currently connected scale '
+                 'will not appear in the scan results (it stops advertising while connected) — it is '
+                 'shown separately above and can be pinned below.</p>')
 
-        # Results + selection
+        # Split into recognized scales and other (unrecognized) devices,
+        # excluding the currently connected MAC (shown as its own option).
+        recognized = [(n, m, v) for (n, m, v) in results if v and m != conn_mac]
+        others = [(n, m) for (n, m, v) in results if not v and m != conn_mac]
+
+        # Results + selection. The connected scale and "Automatic" are always
+        # selectable, even before any scan, so a live connection can be pinned.
         r.append('<form method="POST" action="/scan">')
-        if results:
-            r.append('<div style="margin-top:15px;">')
-            for name, mac in results:
+        r.append('<div style="margin-top:15px;">')
+
+        # Currently connected scale (selectable to pin it)
+        if conn_mac:
+            checked = ' checked' if pinned and conn_mac == pinned else ''
+            cv = conn_vendor or 'acaia'
+            r.append('<label class="device" style="border-color:#a3be8c;">'
+                     f'<input type="radio" name="selected_mac" value="{html.escape(cv)}|{html.escape(conn_mac)}"{checked}>'
+                     '<span class="dev-name">Currently connected scale</span> '
+                     f'<span class="dev-vendor">{html.escape(vendor_label(conn_vendor))}</span><br>'
+                     f'<span class="dev-mac">{html.escape(conn_mac)}</span>'
+                     '</label>')
+
+        # Recognized scan results
+        for name, mac, vendor in recognized:
+            checked = ' checked' if pinned and mac == pinned else ''
+            label = vendor_label(vendor)
+            r.append('<label class="device">'
+                     f'<input type="radio" name="selected_mac" value="{html.escape(vendor)}|{html.escape(mac)}"{checked}>'
+                     f'<span class="dev-name">{html.escape(name) if name else "(unnamed)"}</span> '
+                     f'<span class="dev-vendor">{html.escape(label)}</span><br>'
+                     f'<span class="dev-mac">{html.escape(mac)}</span>'
+                     '</label>')
+
+        # Automatic option
+        auto_checked = '' if pinned else ' checked'
+        r.append('<label class="device">'
+                 f'<input type="radio" name="selected_mac" value="AUTO"{auto_checked}>'
+                 '<span class="dev-name">Automatic (use any nearby scale)</span>'
+                 '</label>')
+        r.append('</div>')
+
+        # Unrecognized devices: let the user pick by MAC and say what it is.
+        if others:
+            r.append('<h3 style="margin-top:25px; color:#fff; font-size:1.05em;">Other Bluetooth devices</h3>')
+            r.append('<p class="help-text">If your scale isn\'t listed above, it may be advertising '
+                     'an unrecognized name. Pick it here and choose its brand.</p>')
+            r.append('<div>')
+            for name, mac in others:
                 checked = ' checked' if pinned and mac == pinned else ''
                 r.append('<label class="device">'
                          f'<input type="radio" name="selected_mac" value="{html.escape(mac)}"{checked}>'
-                         f'<span class="dev-name">{html.escape(name)}</span><br>'
+                         f'<span class="dev-name">{html.escape(name) if name else "(unnamed)"}</span><br>'
                          f'<span class="dev-mac">{html.escape(mac)}</span>'
                          '</label>')
-            auto_checked = '' if pinned else ' checked'
-            r.append('<label class="device">'
-                     f'<input type="radio" name="selected_mac" value="AUTO"{auto_checked}>'
-                     '<span class="dev-name">Automatic (use any nearby scale)</span>'
-                     '</label>')
             r.append('</div>')
             r.append('<div class="row">')
-            r.append('<button type="submit" class="btn">Use selected scale</button>')
-            r.append('<a href="/" class="btn btn-secondary">Back</a>')
+            r.append('<label style="color:#88c0d0; font-weight:bold;">Treat selected device as: </label>')
+            r.append('<select name="fallback_vendor" style="padding:8px; background:#444; color:#fff; '
+                     'border:1px solid #555; border-radius:4px;">')
+            r.append('<option value="bookoo">BooKoo</option>')
+            r.append('<option value="acaia">Acaia</option>')
+            r.append('</select>')
             r.append('</div>')
-        else:
-            r.append('<p class="help-text">No scan results yet. Press "Scan for scales" to look for devices.</p>')
-            r.append('<a href="/" class="btn btn-secondary">Back</a>')
+
+        if not results:
+            r.append('<p class="help-text">No scan results yet. Press "Scan for scales" to look for '
+                     'nearby scales, or pin the currently connected one above.</p>')
+
+        r.append('<div class="row">')
+        r.append('<button type="submit" class="btn">Use selected scale</button>')
+        r.append('<a href="/" class="btn btn-secondary">Back</a>')
+        r.append('</div>')
         r.append('</form>')
 
         r.append('</div></body></html>')
@@ -214,7 +297,7 @@ class GalleryHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
     def send_scan_saved_page(self, choice):
         enc = sys.getfilesystemencoding()
         if choice == '' or choice == 'AUTO':
-            msg = 'Scale selection cleared. The system will connect to any nearby Acaia scale.'
+            msg = 'Scale selection cleared. The system will connect to any nearby supported scale.'
         else:
             msg = f'Scale {html.escape(choice)} selected. Only this scale will be used from now on.'
         r = []
