@@ -26,6 +26,7 @@ KNOWN_CONFIG_KEYS = {
     'READY_SCREEN_TIMEOUT': '180',
     'SLEEP_PAUSE': '360',
     'ACTIVITY_WEIGHT_THRESHOLD': '0.3',
+    'OFF_TARGET_REJECT_GRAMS': '1.0',
     'DISPLAY_BRIGHTNESS': '100',
     'DRIP_OUT_WINDOW': '3.5',
     'MEMORY_A_NAME': '',
@@ -469,7 +470,11 @@ class GalleryHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
         r.append('<meta http-equiv="Content-Type" content="text/html; charset=utf-8">')
         r.append('<style>')
         r.append('body { font-family: sans-serif; background: #222; color: #eee; margin: 0; padding: 20px; }')
-        r.append('h1 { text-align: center; margin-bottom: 30px; margin-top: 10px; }')
+        r.append('.topbar { display: flex; align-items: flex-start; justify-content: flex-end; gap: 18px; min-height: 1em; }')
+        r.append('.topbar a { font-size: 2.2em; line-height: 1; text-decoration: none; transition: transform 0.2s; }')
+        r.append('.settings-icon:hover { transform: rotate(45deg); text-decoration: none; }')
+        r.append('.scale-icon:hover { transform: scale(1.15); text-decoration: none; }')
+        r.append('h1 { text-align: center; margin-bottom: 30px; margin-top: 0; overflow-wrap: anywhere; }')
         r.append('.gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; padding: 0 20px; }')
         r.append('.item { background: #333; padding: 15px; border-radius: 8px; text-align: center; transition: transform 0.2s; }')
         r.append('.item:hover { transform: scale(1.02); background: #3a3a3a; }')
@@ -478,16 +483,14 @@ class GalleryHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
         r.append('a:hover { text-decoration: underline; color: #fff; }')
         r.append('.nav { margin-bottom: 20px; text-align:center; }')
         r.append('.nav a { font-size: 1.2em; display: inline-block; padding: 10px 20px; background: #444; border-radius: 5px; }')
-        r.append('.settings-icon { position: absolute; top: 20px; right: 25px; font-size: 2.2em; text-decoration: none; transition: transform 0.2s; }')
-        r.append('.settings-icon:hover { transform: rotate(45deg); text-decoration: none; }')
-        r.append('.scale-icon { position: absolute; top: 20px; right: 75px; font-size: 2.2em; text-decoration: none; transition: transform 0.2s; }')
-        r.append('.scale-icon:hover { transform: scale(1.15); text-decoration: none; }')
         r.append('</style>')
         r.append('</head><body>')
         
-        # --- GEAR ICON + SCALE SETUP ICON INJECTED HERE ---
-        r.append('<a href="/scan" class="scale-icon" title="Bluetooth Scale Setup">📶</a>')
+        # --- TOP BAR: scale setup + config icons (flex row, reserves its own space) ---
+        r.append('<div class="topbar">')
+        r.append('<a href="/scan" class="scale-icon" title="Bluetooth Scale Setup">⚖️</a>')
         r.append('<a href="/config" class="settings-icon" title="Edit Configuration">⚙️</a>')
+        r.append('</div>')
         # -------------------------------
 
         r.append(f'<h1>{title}</h1>')
