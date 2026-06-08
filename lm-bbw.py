@@ -22,6 +22,15 @@ WEB_DIR = '/opt/lm-bbw/web'
 MIN_GOOD_SHOT_DURATION = 10
 MAC_SAVE_FILE = '/opt/lm-bbw/mac.save'
 
+# A finished shot whose final weight is off the target by this many grams or
+# more (in either direction) is treated as a bad pour: it is not saved to the
+# shot history and is not used to update overshoot learning. Configurable via
+# the OFF_TARGET_REJECT_GRAMS env var; default 1.0 g.
+try:
+    OFF_TARGET_REJECT_GRAMS = float(os.environ.get('OFF_TARGET_REJECT_GRAMS', '1.0'))
+except (TypeError, ValueError):
+    OFF_TARGET_REJECT_GRAMS = 1.0
+
 stop = False
 overshoot_update_executor = ThreadPoolExecutor(max_workers=1)
 
@@ -88,8 +97,21 @@ def update_overshoot(scale, mgr: ControlManager):
         logging.info("Declining to consider short shot as a good shot. Not updating overshoot value or saving image")
         return
     time.sleep(3)
-    logging.debug("over scale weight is %.2f, target was %.2f" % (scale.weight, mgr.current_memory().target))
-    mgr.current_memory().update_overshoot(scale.weight)
+    target = mgr.current_memory().target
+    final_weight = scale.weight
+    logging.debug("over scale weight is %.2f, target was %.2f" % (final_weight, target))
+
+    # Reject shots that landed too far off target (in either direction): don't
+    # learn from them and don't save them to the shot history.
+    if OFF_TARGET_REJECT_GRAMS > 0 and abs(final_weight - target) >= OFF_TARGET_REJECT_GRAMS:
+        logging.info(
+            "Shot off target by %.2f g (>= %.2f g threshold): final %.2f g vs target %.2f g. "
+            "Not updating overshoot value or saving image."
+            % (abs(final_weight - target), OFF_TARGET_REJECT_GRAMS, final_weight, target)
+        )
+        return
+
+    mgr.current_memory().update_overshoot(final_weight)
     mgr.image_needs_save = True
     logging.info("new overshoot on memory %s is %.2f" %(mgr.current_memory().name, mgr.current_memory().overshoot))
 
