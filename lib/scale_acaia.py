@@ -1,6 +1,33 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+# Acaia Bluetooth scale driver (SimplePyBLE).
+#
+# Exposes the common scale interface used across the app, so any vendor driver
+# (e.g. lib.scale_bookoo.BookooScale) is interchangeable:
+#   attributes: mac, connected, weight, battery, units
+#   methods:    connect(), disconnect(), tare()
+#
+# Protocol reference:
+#   doc/BT_Scales/AcaiaCode/protocols.md
+#
+# Supports Acaia "Lunar", "Pyxis", "Umbra", and "Pro"-class scales. Two
+# characteristic layouts exist and are auto-detected after connecting:
+#   - Old style:   characteristic 00002a80-0000-1000-8000-00805f9b34fb
+#   - New style:   characteristic 49535343-8841-43f4-a8d4-ecbe34729bb3
+#                  (Pyxis / Lunar 2021 / Umbra)
+# The enclosing service UUID is not fixed; the driver scans the connected
+# device's services and uses whichever one contains the matching characteristic.
+#
+# Messages use Acaia's variable-length framing: a 0xEF 0xDD header, a type byte,
+# a length byte, the payload, and two trailing checksum bytes (separate running
+# sums over even- and odd-indexed payload bytes). The scale requires an initial
+# handshake (ID + notification request) and a periodic heartbeat (~2 s) to keep
+# streaming weight. Battery/units arrive in a separate settings frame.
+#
+# Scales are recognized during scanning by advertised-name prefix:
+#   ACAIA, PYXIS, UMBRA, LUNAR, PROCH  (see ACAIA_NAME_PREFIXES)
+
 __version__ = "0.7.3-simplepyble-fixed"
 
 import logging
@@ -24,7 +51,7 @@ root.setLevel(logging.INFO)
 HEADER1 = 0xef
 HEADER2 = 0xdd
 # Acaia UUIDs
-OLD_CHAR_UUID = "00002a80-0000-1000-8000-00805f9b34fb"
+    OLD_CHAR_UUID = "00002a80-0000-1000-8000-00805f9b34fb"
 PYXIS_CMD_UUID = "49535343-8841-43f4-a8d4-ecbe34729bb3"
 
 def normalize_uuid(uuid_str):
