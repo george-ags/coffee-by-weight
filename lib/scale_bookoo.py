@@ -9,8 +9,8 @@
 #   methods:    connect(), disconnect(), tare()
 #
 # Protocol references:
-#   lib/BooKooCode/OpenSource/bookoo_ultra_scale/protocols.md
-#   lib/BooKooCode/OpenSource/bookoo_mini_scale/protocols.md
+#   doc/BT_Scales/BooKooCode/OpenSource/bookoo_ultra_scale/protocols.md
+#   doc/BT_Scales/BooKooCode/OpenSource/bookoo_mini_scale/protocols.md
 #
 # Supports the BooKoo "Ultra" and "Mini" models. Both use an identical wire
 # protocol: the same 0x0FFE service, the same 0xFF11/0xFF12 characteristics,
