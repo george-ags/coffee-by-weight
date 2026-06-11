@@ -100,10 +100,61 @@ try:
 except Exception as e:
     logging.error(f"Error loading images: {e}")
 
+# --- VENDOR BADGE CONFIGURATION ---
+# Small "logo" shown in the top-left of the main area indicating which scale
+# brand is connected (mirrors the vendor badges on the web scan page). If an
+# image asset exists at img/<vendor>.png it is used; otherwise a text pill is
+# drawn. Kept local (no import of lib.scales) to avoid coupling the display.
+VENDOR_LABELS = {'acaia': 'Acaia', 'bookoo': 'BooKoo'}
+VENDOR_COLORS = {'acaia': '#6FB7E8', 'bookoo': '#E8913A'}
+
+vendor_logos = {}
+try:
+    for _v in VENDOR_LABELS:
+        _p = IMG_DIR + "%s.png" % _v
+        if os.path.exists(_p):
+            _raw = Image.open(_p).convert("RGBA")
+            _target_h = 20
+            _w = int(_target_h * (_raw.width / _raw.height))
+            vendor_logos[_v] = _raw.resize((_w, _target_h))
+except Exception as e:
+    logging.error(f"Error loading vendor logos: {e}")
+
 # --- COLORS ---
 bg_color = "BLACK"
 light_bg_color = "DIMGREY"
 fg_color = "WHITE"
+
+# --- HELPER: Draw Vendor Badge ---
+def draw_vendor_badge(draw, img, xy, vendor):
+    """
+    Draw a small vendor 'logo' in the top-left of the main area. Uses an image
+    asset (img/<vendor>.png) if loaded, otherwise a compact text pill. Has a
+    solid background so it stays legible on top of the flow graph.
+    """
+    if not vendor:
+        return
+    x, y = int(xy[0]), int(xy[1])
+
+    logo = vendor_logos.get(vendor)
+    if logo is not None:
+        img.paste(logo, (x, y), logo)
+        return
+
+    label = VENDOR_LABELS.get(vendor, str(vendor).title())
+    accent = VENDOR_COLORS.get(vendor, fg_color)
+    pad_x, pad_y = 6, 3
+    tw = draw.textlength(label, label_font_sml)
+    th = label_font_sml.size
+    x2 = x + tw + pad_x * 2
+    y2 = y + th + pad_y * 2
+    try:
+        draw.rounded_rectangle((x, y, x2, y2), radius=5, fill=bg_color, outline=accent, width=2)
+    except AttributeError:
+        # Older Pillow without rounded_rectangle.
+        draw.rectangle((x, y, x2, y2), fill=bg_color, outline=accent, width=2)
+    draw.text((x + pad_x, y + pad_y), label, accent, label_font_sml)
+
 
 # --- HELPER: Draw Battery Icon ---
 def draw_battery(draw, xy, level, scale=1.0):
@@ -333,7 +384,8 @@ class FlowGraph:
 class DisplayData:
     def __init__(self, weight: float, sample_rate: float, memory, flow_data: list, battery: int,
                  paddle_on: bool, shot_time_elapsed: float, save_image: bool = False,
-                 flow_smooth_factor: int = 10, timeout_stop: bool = False, force_ready: bool = False):
+                 flow_smooth_factor: int = 10, timeout_stop: bool = False, force_ready: bool = False,
+                 vendor: str = None):
         self.weight = weight
         self.sample_rate = sample_rate
         self.memory = memory
@@ -347,6 +399,8 @@ class DisplayData:
         # When True, the display reverts to the Ready/logo screen (clears the
         # post-shot summary and graph). Set after READY_SCREEN_TIMEOUT of idle.
         self.force_ready = force_ready
+        # Connected scale vendor key ('acaia' / 'bookoo'); drives the badge.
+        self.vendor = vendor
 
     def flow_rate_moving_avg(self) -> list:
         if not self.flow_data:
@@ -624,6 +678,8 @@ class Display:
                     # Include force_ready so the transition TO the logo screen
                     # renders even though nothing else in the signature changed.
                     data.force_ready,
+                    # Vendor badge identity (redraw if the connected brand changes).
+                    getattr(data, 'vendor', None),
                 )
 
                 if animating or just_woke or data.save_image or render_sig != self.last_render_sig:
@@ -876,5 +932,10 @@ def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayO
         if warn_y < graph_y:
             warn_y = graph_y  # keep it below the header if the icon is tall
         img.paste(warning_img, (warn_x, warn_y), warning_img)
+
+    # --- 8. VENDOR BADGE (top-left of main area, always shown) ---
+    # Drawn last so it sits on top of the graph during brewing; on the ready
+    # screen the lion is centered, so the top-left corner is clear.
+    draw_vendor_badge(draw, img, (4, header_h + 4), getattr(data, 'vendor', None))
 
     return img

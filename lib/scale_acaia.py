@@ -51,7 +51,7 @@ root.setLevel(logging.INFO)
 HEADER1 = 0xef
 HEADER2 = 0xdd
 # Acaia UUIDs
-    OLD_CHAR_UUID = "00002a80-0000-1000-8000-00805f9b34fb"
+OLD_CHAR_UUID = "00002a80-0000-1000-8000-00805f9b34fb"
 PYXIS_CMD_UUID = "49535343-8841-43f4-a8d4-ecbe34729bb3"
 
 def normalize_uuid(uuid_str):
