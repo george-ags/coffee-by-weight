@@ -425,12 +425,27 @@ class DisplayData:
     def flow_rate_moving_avg(self) -> list:
         if not self.flow_data:
             return []
-        s = pd.Series(self.flow_data)
+        data = list(self.flow_data)
+        s = pd.Series(data)
         # Centered rolling mean: averages flow_smooth_factor//2 samples on each
         # side. A mean (unlike a median) preserves the peak/plateau amplitude of
         # the flow envelope, and center=True avoids lag/left-shift. min_periods=1
         # keeps the curve full-length (no leading NaNs to drop).
-        return s.rolling(self.flow_smooth_factor, min_periods=1, center=True).mean().to_list()
+        out = s.rolling(self.flow_smooth_factor, min_periods=1, center=True).mean().to_list()
+        # Near the ends the centered window degrades into a one-sided mean: the
+        # final point becomes the mean of the last ~W/2 samples, which biases
+        # the post-shot tail upward (the curve appears to stop at ~0.5 g/s even
+        # though the raw flow decayed to zero). Recompute the first/last W/2
+        # points with a window that shrinks symmetrically, so the endpoints
+        # converge to the raw samples and the tail visibly reaches zero.
+        n = len(data)
+        half = max(1, self.flow_smooth_factor // 2)
+        for i in range(n):
+            if i < half or i >= n - half:
+                k = min(i, n - 1 - i, half)
+                lo, hi = i - k, i + k + 1
+                out[i] = sum(data[lo:hi]) / (hi - lo)
+        return out
 
 class DisplaySize(Enum):
     SIZE_2_4 = 1
@@ -682,6 +697,13 @@ class Display:
                 # Also always render on wake (screen was just cleared) and on a
                 # save frame (the finished-shot snapshot must be drawn to be saved).
                 animating = data.paddle_on or (not self.drip_out_locked) or self.show_warning
+                # The flow buffer keeps capturing the decay slightly past the
+                # drip-out lock (control's capture window is DRIP_OUT_WINDOW +
+                # 0.5s). Keep rendering through that settle margin so the final
+                # near-zero samples reach the screen even when no save frame
+                # follows (short or off-target shots are never saved).
+                if (not animating) and self.shot_stop_time:
+                    animating = (time.time() - self.shot_stop_time) <= (Drip_Out_Window + 0.6)
                 render_sig = (
                     round(data.weight, 1),
                     round(data.memory.target, 1),
@@ -916,12 +938,18 @@ def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayO
             flow_image = FlowGraph(flow_rate_data, data.memory.color, width_pixels=g_w, height_pixels=g_h, avg_flow=final_avg_val, final_weight=final_weight_val).generate_graph()
             img.paste(flow_image, (0, header_h))
             
-            # Draw Time Axis Labels (bottom of graph area)
-            last_sample_time = data.sample_rate * float(len(data.flow_data))
-            axis_y = footer_line_y - 20 
-            draw.text((4, axis_y), "-%ds" % math.ceil(last_sample_time), fg_color, label_font_sml)
-            draw.text((width / 2 - 22, axis_y), "-%ds" % math.ceil(last_sample_time / 2), fg_color, label_font_sml)
-            draw.text((width - 22, axis_y), "0s", fg_color, label_font_sml)
+            # Draw Time Axis Labels (bottom of graph area). The graph always
+            # scales the whole buffer to the full width — i.e. the entire brew
+            # (the buffer is cleared at shot start) — so label it as the shot
+            # timeline: 0s at the left (shot start) to the total span at the
+            # right, growing dynamically as the shot runs.
+            total_span = data.sample_rate * float(len(data.flow_data))
+            axis_y = footer_line_y - 20
+            mid_txt = "%ds" % round(total_span / 2)
+            end_txt = "%ds" % math.ceil(total_span)
+            draw.text((4, axis_y), "0s", fg_color, label_font_sml)
+            draw.text((width / 2 - draw.textlength(mid_txt, label_font_sml) / 2, axis_y), mid_txt, fg_color, label_font_sml)
+            draw.text((width - 4 - draw.textlength(end_txt, label_font_sml), axis_y), end_txt, fg_color, label_font_sml)
             
         else:
             g_w, g_h = 240, 160
@@ -931,10 +959,11 @@ def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayO
             flow_image = FlowGraph(flow_rate_data, data.memory.color, width_pixels=g_w, height_pixels=g_h, avg_flow=final_avg_val, final_weight=final_weight_val).generate_graph()
             img.paste(flow_image, (0, graph_y))
             
-            last_sample_time = data.sample_rate * float(len(data.flow_data))
-            axis_y = timer_y 
-            draw.text((4, axis_y), "-%ds" % math.ceil(last_sample_time), fg_color, label_font_sml)
-            draw.text((width - 22, axis_y), "0s", fg_color, label_font_sml)
+            total_span = data.sample_rate * float(len(data.flow_data))
+            axis_y = timer_y
+            end_txt = "%ds" % math.ceil(total_span)
+            draw.text((4, axis_y), "0s", fg_color, label_font_sml)
+            draw.text((width - 4 - draw.textlength(end_txt, label_font_sml), axis_y), end_txt, fg_color, label_font_sml)
 
             fmt_shot_time = "timer:{:0.1f}s".format(data.shot_time_elapsed)
             w = draw.textlength(fmt_shot_time, timer_font)

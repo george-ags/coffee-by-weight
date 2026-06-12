@@ -145,9 +145,14 @@ def main():
     display = Display(display_data_queue, display_size=DisplaySize.SIZE_2_0, image_save_dir=WEB_DIR)
     display.start()
 
-    # --- UPDATED: Calculate points based on History Seconds ---
-    # e.g., 60 seconds / 0.1s rate = 600 points buffer
-    max_points = round(graph_history_seconds / refreshRate)
+    # --- Flow buffer sizing ---
+    # The graph scales the whole buffer to the full screen width, so as long as
+    # the buffer can hold the longest possible shot, the display always shows
+    # the complete brew. Lower-bound the buffer by the shot timeout plus the
+    # drip-out capture window so a configured GRAPH_HISTORY_SECONDS shorter
+    # than a shot can never pop the brew's beginning off the graph.
+    buffer_seconds = max(graph_history_seconds, SHOT_TIMEOUT_SECONDS + 5)
+    max_points = round(buffer_seconds / refreshRate)
     mgr = ControlManager(max_flow_points=max_points)
     # ----------------------------------------------------------
 
