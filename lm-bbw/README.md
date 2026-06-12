@@ -182,31 +182,29 @@ sudo pip3 install simplepyble --break-system-packages
 
 ### 3. Install and start the service
 
+LM-BBW lives in the [coffee-by-weight](https://github.com/george-ags/coffee-by-weight) monorepo, which also contains the shared `common/` package (scale drivers, display drivers) and other apps. The `deploy.sh` script assembles everything into `/opt/lm-bbw`:
+
 ```bash
-git clone https://github.com/george-ags/lm-bbw.git
-cd lm-bbw
-sudo mkdir -p /opt/lm-bbw/web
-sudo cp -r *.py lib /opt/lm-bbw/
-sudo chmod +x /opt/lm-bbw/lm-bbw.py
-sudo cp service/lm-bbw.service /etc/systemd/system/
-sudo cp service/lm-bbw.env /etc/default/
-sudo systemctl daemon-reload
-sudo systemctl enable --now lm-bbw
+git clone https://github.com/george-ags/coffee-by-weight.git
+cd coffee-by-weight
+./deploy.sh lm-bbw --install
 ```
+
+`--install` copies the code (the `lm-bbw/` app plus `common/`) to `/opt/lm-bbw`, installs the systemd unit and the default env file, and enables + starts the service. It is only needed the first time.
 
 By default the software scans for any supported scale nearby and connects to the first one found, then remembers its address and reconnects on subsequent starts. To force a specific scale (recommended when more than one is in range), use the Bluetooth setup page — see [Web interface](#web-interface).
 
-To update an existing install, re-copy the code and restart:
+To update an existing install, pull and redeploy:
 
 ```bash
-sudo cp -r *.py lib /opt/lm-bbw/ && sudo systemctl restart lm-bbw
+git pull && ./deploy.sh lm-bbw
 ```
 
 ---
 
 ## Configuration
 
-Settings are environment variables read at startup from `/etc/default/lm-bbw.env` (the repo copy is `service/lm-bbw.env`). Edit them either by hand or, more easily, through the [web interface](#web-interface). Either way, the service must restart for changes to take effect — the web UI does this automatically.
+Settings are environment variables read at startup from `/etc/default/lm-bbw.env` (the repo copy is `lm-bbw/service/lm-bbw.env`). Edit them either by hand or, more easily, through the [web interface](#web-interface). Either way, the service must restart for changes to take effect — the web UI does this automatically.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -322,11 +320,11 @@ To support this, the former "target lock" toggle was repurposed as a **scale con
 
 A high-level architecture overview — processes, threads, the shot lifecycle, the display state machine, and the configuration flow — is in [LM-BBW_Architecture.md](../doc/lm-bbw/LM-BBW_Architecture.md).
 
-### ControlManager (`lib/control.py`)
+### ControlManager (`app/control.py`)
 
 Owns the physical devices: defines the buttons, holds state (targets, memory banks, relay), runs the paddle watchdog, and maintains scale connectivity.
 
-### Display (`lib/display.py`)
+### Display (`app/display.py`)
 
 Defines how the screen is drawn, updates the physical display, and saves images of finished shots. It runs in a separate process so rendering never blocks control or Bluetooth logic — the main loop pushes the latest data onto a queue, which the display process drains each refresh. Graph rendering uses simple lines (a deliberate choice after matplotlib proved too CPU-heavy and other libraries had their own drawbacks).
 
@@ -334,9 +332,9 @@ Defines how the screen is drawn, updates the physical display, and saves images 
 
 Sets up the Display and ControlManager, then orchestrates data collection, the target-weight cutoff, overshoot learning, and state updates.
 
-### Scale drivers (`lib/scales.py`, `lib/scale_acaia.py`, `lib/scale_bookoo.py`)
+### Scale drivers (`common/scales.py`, `common/scale_acaia.py`, `common/scale_bookoo.py`)
 
-Each vendor has its own driver exposing a common interface (`connect`, `disconnect`, `tare`, and `mac` / `connected` / `weight` / `battery` / `units`). `scales.py` is the vendor-neutral layer: a combined scanner that tags each device with its brand, a factory, and a `Scale` wrapper that delegates to the right backend and can switch vendors in place. To add a new vendor, write a driver with the same interface and register its advertised-name prefix and constructor in `scales.py`. All BLE scans are serialized through a single lock in `lib/ble.py` so the adapter is never scanned by two code paths at once.
+These live in the repo's shared `common/` package (used by every app in coffee-by-weight, not just LM-BBW), so a driver fix lands everywhere with one commit. Each vendor has its own driver exposing a common interface (`connect`, `disconnect`, `tare`, and `mac` / `connected` / `weight` / `battery` / `units`). `scales.py` is the vendor-neutral layer: a combined scanner that tags each device with its brand, a factory, and a `Scale` wrapper that delegates to the right backend and can switch vendors in place. To add a new vendor, write a driver with the same interface and register its advertised-name prefix and constructor in `scales.py`. All BLE scans are serialized through a single lock in `common/ble.py` so the adapter is never scanned by two code paths at once.
 
 ---
 
