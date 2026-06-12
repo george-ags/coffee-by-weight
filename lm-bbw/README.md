@@ -10,7 +10,7 @@ This project was inspired by and originally based on Marcus Sorensen's [Apollo](
 
 ## Demo
 
-▶️ **[Watch the demo video](../doc/lm-bbw.mp4)** — LM-BBW landing a shot on target.
+▶️ **[Watch the demo video](../doc/lm-bbw/lm-bbw.mp4)** — LM-BBW landing a shot on target.
 
 
 ---
@@ -51,7 +51,7 @@ This project was inspired by and originally based on Marcus Sorensen's [Apollo](
 
 The controller runs as a single main process (with background threads for the paddle watchdog, Bluetooth scanning, and the scale connection) plus a separate display process fed over a queue. It reads the paddle position, drives a relay that proxies the paddle circuit, streams weight from the scale, and decides when to cut the shot.
 
-For a detailed breakdown of the processes, the shot lifecycle, the display state machine, and the configuration flow, see [**LM-BBW_Architecture.md**](../doc/LM-BBW_Architecture.md).
+For a detailed breakdown of the processes, the shot lifecycle, the display state machine, and the configuration flow, see [**LM-BBW_Architecture.md**](../doc/lm-bbw/LM-BBW_Architecture.md).
 
 ---
 
@@ -103,32 +103,32 @@ For the included enclosure, buttons should be 12 mm, and the rocker should be re
 
 ### Wiring
 
-![Wiring diagram](../doc/wiring_diagram.png)
+![Wiring diagram](../doc/lm-bbw/wiring_diagram.png)
 
 I crimped standard Dupont 2.54 mm connectors for easy wiring to the Pi header. To simplify power and control between the Micra and the controller, I built a custom harness that keeps the relay/switch ground and power inside the Micra, leaving just 4 pins back to the controller (5 V, GND, and one wire per IO).
 
-![Internal harness](../doc/internal_harness.jpg)
+![Internal harness](../doc/lm-bbw/internal_harness.jpg)
 
 The Micra paddle is reached by removing the four screws above the group head, exposing a bundle with black and white wires on bullet connectors. Insert the relay and Pi into this circuit to read the paddle state and control the machine.
 
-![Paddle connectors](../doc/paddle_connectors.jpeg)
+![Paddle connectors](../doc/lm-bbw/paddle_connectors.jpeg)
 
 ### Enclosure
 
-The enclosure STL is [here](../doc/LM-top-full.stl). It may need fine-tuning for your printer's tolerances.
+The enclosure STL is [here](../doc/lm-bbw/LM-top-full.stl). It may need fine-tuning for your printer's tolerances.
 
 For smaller 3D pronters you can use the 2-piece design:
 
-[Enclosure part 1](../doc/LM-top-small.stl)
+[Enclosure part 1](../doc/lm-bbw/LM-top-small.stl)
 
-[Enclosure part 2](../doc/LM-top-big-square.stl)
-[Enclosure part 2 - another option](../doc/LM-top-big-round.stl)
+[Enclosure part 2](../doc/lm-bbw/LM-top-big-square.stl)
+[Enclosure part 2 - another option](../doc/lm-bbw/LM-top-big-round.stl)
 
 The display mounts with four screws, alongside the buttons.
 
-![Top cover with wiring](../doc/lm-bbw-top-cover-wiring.png)
+![Top cover with wiring](../doc/lm-bbw/lm-bbw-top-cover-wiring.png)
 
-![Top cover mounted](../doc/lm-bbw-gray-top.png)
+![Top cover mounted](../doc/lm-bbw/lm-bbw-gray-top.png)
 
 ---
 
@@ -320,7 +320,7 @@ To support this, the former "target lock" toggle was repurposed as a **scale con
 
 ## Development
 
-A high-level architecture overview — processes, threads, the shot lifecycle, the display state machine, and the configuration flow — is in [LM-BBW_Architecture.md](../doc/LM-BBW_Architecture.md).
+A high-level architecture overview — processes, threads, the shot lifecycle, the display state machine, and the configuration flow — is in [LM-BBW_Architecture.md](../doc/lm-bbw/LM-BBW_Architecture.md).
 
 ### ControlManager (`lib/control.py`)
 

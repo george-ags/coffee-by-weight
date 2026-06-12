@@ -64,7 +64,7 @@ flowchart TB
 
 - **Main loop** orchestrates everything at `REFRESH_RATE` (~0.1 s): checks sleep, keeps the scale connected, evaluates the target cutoff, and pushes a `DisplayData` snapshot onto the queue.
 - **Watchdog thread** polls the paddle to start/stop shots and enforces the debounce + release latch (the emergency stop path).
-- **BLE scan thread** searches for a supported scale, classifies it by vendor, and hands it to the main thread to connect. Every BLE scan (discovery, the web scan, and each driver's connect-scan) is serialized through one lock in `lib/ble.py` so the adapter is never scanned by two paths at once.
+- **BLE scan thread** searches for a supported scale, classifies it by vendor, and hands it to the main thread to connect. Every BLE scan (discovery, the web scan, and each driver's connect-scan) is serialized through one lock in `common/ble.py` so the adapter is never scanned by two paths at once.
 - **Scale wrapper** (`scales.py`) holds the active vendor driver (`scale_acaia` or `scale_bookoo`) behind a common interface; the driver's connect / heartbeat / notify threads update `weight`/`battery` asynchronously.
 - **Display process** is fully separate; it drains the queue to the latest frame and only redraws when the picture actually changes.
 
@@ -143,7 +143,7 @@ flowchart LR
     W -->|"write key=value<br/>(preserves comments)"| ENV["/etc/default/lm-bbw.env"]
     W -->|"systemctl restart lm-bbw"| SYS["systemd"]
     SYS -->|"EnvironmentFile="| ENV
-    SYS -->|"relaunch"| APP["lm-bbw.py + lib/*"]
+    SYS -->|"relaunch"| APP["lm-bbw.py + app/* + common/*"]
     ENV -.->|"os.environ at startup"| APP
 ```
 
@@ -153,16 +153,18 @@ flowchart LR
 
 ## File map
 
+Paths are relative to the `coffee-by-weight` repo root. `common/` is the shared package (also used by other apps such as grind-bw); on a deployed Pi it is copied into `/opt/lm-bbw/` next to `app/` by `deploy.sh`.
+
 | File | Role |
 |------|------|
-| `lm-bbw.py` | Entry point; main loop, shot cutoff logic, overshoot learning, wiring |
-| `lib/control.py` | `ControlManager`: buttons, relay, watchdog, scale connectivity + selection/pinning, memory banks, sleep/ready timers |
-| `lib/scales.py` | Vendor-neutral layer: combined scan + classification, factory, and the `Scale` wrapper that delegates to a backend |
-| `lib/scale_acaia.py` | `AcaiaScale`: BLE scan/connect/heartbeat, Acaia protocol decode |
-| `lib/scale_bookoo.py` | `BookooScale`: BLE connect, BooKoo Ultra/Mini protocol decode |
-| `lib/ble.py` | Single lock serializing all BLE adapter scans |
-| `lib/display.py` | Display process: frame rendering, graph, screen states, image saving |
-| `lib/webserver.py` | Shot-history gallery + `/config` editor + `/scan` scale setup |
-| `lib/lcdconfig.py`, `lib/LCD_2inch*.py` | WaveShare SPI LCD drivers |
-| `service/lm-bbw.service` | systemd unit |
-| `service/lm-bbw.env` | default configuration |
+| `lm-bbw/lm-bbw.py` | Entry point; main loop, shot cutoff logic, overshoot learning, wiring |
+| `lm-bbw/app/control.py` | `ControlManager`: buttons, relay, watchdog, scale connectivity + selection/pinning, memory banks, sleep/ready timers |
+| `common/scales.py` | Vendor-neutral layer: combined scan + classification, factory, and the `Scale` wrapper that delegates to a backend |
+| `common/scale_acaia.py` | `AcaiaScale`: BLE scan/connect/heartbeat, Acaia protocol decode |
+| `common/scale_bookoo.py` | `BookooScale`: BLE connect, BooKoo Ultra/Mini protocol decode |
+| `common/ble.py` | Single lock serializing all BLE adapter scans |
+| `lm-bbw/app/display.py` | Display process: frame rendering, graph, screen states, image saving |
+| `lm-bbw/app/webserver.py` | Shot-history gallery + `/config` editor + `/scan` scale setup |
+| `common/lcd/` | WaveShare SPI LCD drivers |
+| `lm-bbw/service/lm-bbw.service` | systemd unit |
+| `lm-bbw/service/lm-bbw.env` | default configuration |
