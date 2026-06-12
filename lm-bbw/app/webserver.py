@@ -9,6 +9,12 @@ import threading
 
 from common.scales import vendor_label
 
+# Shared image assets (e.g. the scale-setup icon) live in the common package,
+# outside the web root, so they are served through a small explicit route.
+import common as _common_pkg
+COMMON_IMG_DIR = os.path.join(os.path.dirname(os.path.abspath(_common_pkg.__file__)), "img")
+SCALE_ICON_FILE = os.path.join(COMMON_IMG_DIR, "scale-bt.png")
+
 # Pointing to the systemd environment file
 ENV_FILE_PATH = '/etc/default/lm-bbw.env'
 
@@ -52,9 +58,27 @@ class GalleryHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
             self.send_config_page()
         elif self.path == '/scan' or self.path.startswith('/scan?'):
             self.send_scan_page()
+        elif self.path == '/assets/scale-bt.png':
+            self.send_common_asset(SCALE_ICON_FILE, 'image/png')
         else:
             # Fall back to standard file serving / gallery listing
             super().do_GET()
+
+    def send_common_asset(self, filepath, content_type):
+        """Serve a single whitelisted file from the shared common/img directory."""
+        try:
+            with open(filepath, 'rb') as f:
+                body = f.read()
+            self.send_response(200)
+            self.send_header('Content-Type', content_type)
+            self.send_header('Content-Length', str(len(body)))
+            self.send_header('Cache-Control', 'max-age=86400')
+            self.end_headers()
+            self.wfile.write(body)
+        except FileNotFoundError:
+            self.send_error(404, 'Asset not found')
+        except Exception:
+            self.send_error(500, 'Asset error')
 
     def do_POST(self):
         # Handle form submissions for the config page
@@ -470,8 +494,11 @@ class GalleryHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
         r.append('<meta http-equiv="Content-Type" content="text/html; charset=utf-8">')
         r.append('<style>')
         r.append('body { font-family: sans-serif; background: #222; color: #eee; margin: 0; padding: 20px; }')
-        r.append('.topbar { display: flex; align-items: flex-start; justify-content: flex-end; gap: 18px; min-height: 1em; }')
+        r.append('.topbar { display: flex; align-items: center; justify-content: flex-end; gap: 18px; min-height: 1em; }')
         r.append('.topbar a { font-size: 2.2em; line-height: 1; text-decoration: none; transition: transform 0.2s; }')
+        # The icon image inherits the anchor's 2.2em font-size, so height:1em
+        # renders it exactly as tall as the gear emoji's em box.
+        r.append('.topbar a img { height: 1em; width: auto; display: block; }')
         r.append('.settings-icon:hover { transform: rotate(45deg); text-decoration: none; }')
         r.append('.scale-icon:hover { transform: scale(1.15); text-decoration: none; }')
         r.append('h1 { text-align: center; margin-bottom: 30px; margin-top: 0; overflow-wrap: anywhere; }')
@@ -488,7 +515,13 @@ class GalleryHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
         
         # --- TOP BAR: scale setup + config icons (flex row, reserves its own space) ---
         r.append('<div class="topbar">')
-        r.append('<a href="/scan" class="scale-icon" title="Bluetooth Scale Setup">⚖️</a>')
+        # Scale-setup icon: use the shared image (served from common/img via
+        # /assets/) when present; fall back to the emoji if the file is absent.
+        if os.path.exists(SCALE_ICON_FILE):
+            scale_icon_html = '<img src="/assets/scale-bt.png" alt="Scale setup">'
+        else:
+            scale_icon_html = '⚖️'
+        r.append(f'<a href="/scan" class="scale-icon" title="Bluetooth Scale Setup">{scale_icon_html}</a>')
         r.append('<a href="/config" class="settings-icon" title="Edit Configuration">⚙️</a>')
         r.append('</div>')
         # -------------------------------
