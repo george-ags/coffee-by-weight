@@ -10,7 +10,7 @@ Adds brew-by-weight to the La Marzocco Linea Micra: reads a Bluetooth scale, sho
 
 ▶️ **[Watch the demo](./doc/lm-bbw/lm-bbw.mp4)** — LM-BBW landing a shot on target.
 
-### ⚙️ GRIND-BW — Grind-by-Weight *(in development)*
+### ⚙️ [GRIND-BW — Grind-by-Weight](./grind-bw/README.md)
 
 Grind-by-weight controller for a coffee grinder, built on the same shared core. Currently a working skeleton: it scans for a supported scale, connects, and streams live weight; dosing and motor control are in progress. See the [architecture & status](./doc/grind-bw/GRIND-BW_Architecture.md).
 
