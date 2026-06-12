@@ -96,7 +96,15 @@ def update_overshoot(scale, mgr: ControlManager):
     if mgr.shot_time_elapsed() < MIN_GOOD_SHOT_DURATION:
         logging.info("Declining to consider short shot as a good shot. Not updating overshoot value or saving image")
         return
-    time.sleep(3)
+    # Wait until the drip-out flow capture window (see control.add_flow_rate_data)
+    # has fully closed before reading the final weight and flagging the image for
+    # save. The buffer keeps recording the flow decaying to zero for
+    # DRIP_OUT_CAPTURE_SECONDS after relay-off; if we save earlier the frozen
+    # graph ends mid-decay ("cut at the end" / never reaching zero). The small
+    # margin guarantees the final near-zero sample is already in the buffer when
+    # the save frame is rendered. max(3, ...) preserves the original settle time
+    # if the drip-out window is configured shorter.
+    time.sleep(max(3.0, control.DRIP_OUT_CAPTURE_SECONDS + 0.3))
     target = mgr.current_memory().target
     final_weight = scale.weight
     logging.debug("over scale weight is %.2f, target was %.2f" % (final_weight, target))
