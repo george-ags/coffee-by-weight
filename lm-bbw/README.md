@@ -342,8 +342,10 @@ Each vendor has its own driver exposing a common interface (`connect`, `disconne
 
 ## Credits & license
 
-- Inspired by and originally based on [Apollo](https://github.com/mlsorensen/apollo) by Marcus Sorensen.
-- BooKoo scale support is based on BooKoo's published protocol specs (`lib/BooKooCode/OpenSource/`).
-- The WaveShare LCD drivers (`lib/lcdconfig.py`, `lib/LCD_2inch*.py`) are by the WaveShare team and retain their original MIT license.
+>Inspired by and originally based on [Apollo](https://github.com/mlsorensen/apollo) by Marcus Sorensen.
 
-This is a personal hobby project provided as-is, without warranty. If you intend to redistribute it, please add an explicit project license. If you are a commercial organization and want to use this project please contact me.
+>This is a personal hobby project provided as-is, without warranty. 
+
+>If you intend to redistribute it, please add an explicit project license. 
+
+>If you are a commercial organization and want to use this project please contact me.

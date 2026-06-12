@@ -52,4 +52,10 @@ Use `grind-bw` in place of `lm-bbw` on the grinder Pi. Per-app setup details (Pi
 
 ## Credits & license
 
-Inspired by and originally based on [Apollo](https://github.com/mlsorensen/apollo) by Marcus Sorensen. BooKoo scale support is based on BooKoo's published protocol specs. The WaveShare LCD drivers (`common/lcd/`) are by the WaveShare team and retain their original MIT license. See the [LM-BBW README](./lm-bbw/README.md#credits--license) for details. If you are a commercial organization and want to use this project please contact me.
+> Lm_BBW was inspired by and originally based on [Apollo](https://github.com/mlsorensen/apollo) by Marcus Sorensen.
+
+> BooKoo scale support is based on BooKoo's published protocol specs in [BooKoo team's GitHub](https://github.com/BooKooCode/OpenSource)
+
+> The WaveShare LCD drivers (`common/lcd/`) are by the WaveShare team and retain their original MIT license.
+
+> If you are a commercial organization and want to use this project please contact me
