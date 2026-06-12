@@ -130,7 +130,11 @@ try:
         _p = os.path.join(_COMMON_IMG_DIR, "%s.png" % _v)
         if os.path.exists(_p):
             _raw = Image.open(_p).convert("RGBA")
-            _target_h = 20
+            # Match the logo height to the framed text-pill badge drawn in the
+            # no-png fallback (draw_vendor_badge): its outer box is
+            # label_font_sml.size + pad_y*2 tall (pad_y=3), so the image badge
+            # and the text-pill badge are the same size.
+            _target_h = label_font_sml.size + 3 * 2
             _w = int(_target_h * (_raw.width / _raw.height))
             vendor_logos[_v] = _raw.resize((_w, _target_h))
 except Exception as e:
