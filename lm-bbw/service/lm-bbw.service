@@ -1,10 +1,10 @@
 [Unit]
-Description=Lm-bbw service - Acaia Lunar add-on
+Description=LM-BBW - brew-by-weight controller for the La Marzocco Micra
 BindsTo=bluetooth.target
 After=bluetooth.target
 
 [Service]
-# --- FIX: Reset Bluetooth Adapter on Start ---
+# --- Reset Bluetooth Adapter on Start ---
 # This kills any 'stale' connections that prevent the scale from being found.
 ExecStartPre=/bin/sh -c 'rfkill unblock bluetooth; bluetoothctl power off; sleep 1; bluetoothctl power on; sleep 2'
 # ---------------------------------------------

@@ -7,7 +7,7 @@ import io
 import sys
 import threading
 
-from lib.scales import vendor_label
+from common.scales import vendor_label
 
 # Pointing to the systemd environment file
 ENV_FILE_PATH = '/etc/default/lm-bbw.env'

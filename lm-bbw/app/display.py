@@ -12,16 +12,30 @@ from typing import Optional
 
 from PIL import Image, ImageFont, ImageDraw
 
+# --- SHARED ASSET LOCATIONS ---
+# Fonts and shared images (e.g. vendor badges) live in the shared `common`
+# package; app-specific images (logos, icons) live next to this file in
+# app/img/. Both are resolved from module locations so they work regardless
+# of the working directory.
+import common as _common_pkg
+_COMMON_DIR = os.path.dirname(os.path.abspath(_common_pkg.__file__))
+_FONT_DIR = os.path.join(_COMMON_DIR, "font")
+_COMMON_IMG_DIR = os.path.join(_COMMON_DIR, "img")
+_APP_IMG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "img")
+
 # --- FONT CONFIGURATION ---
 try:
-    label_font = ImageFont.truetype("lib/font/LiberationMono-Regular.ttf", 16)
-    label_font_sml = ImageFont.truetype("lib/font/LiberationMono-Regular.ttf", 12)
-    label_font_mid = ImageFont.truetype("lib/font/LiberationMono-Regular.ttf", 20)
-    label_font_lg = ImageFont.truetype("lib/font/LiberationMono-Regular.ttf", 24)
-    value_font = ImageFont.truetype("lib/font/Quicksand-Regular.ttf", 24)
-    value_font_med = ImageFont.truetype("lib/font/Quicksand-Regular.ttf", 28) 
-    value_font_lg = ImageFont.truetype("lib/font/Quicksand-Regular.ttf", 36)
-    value_font_lg_bold = ImageFont.truetype("lib/font/Quicksand-Bold.ttf", 36)
+    _mono = os.path.join(_FONT_DIR, "LiberationMono-Regular.ttf")
+    _quick = os.path.join(_FONT_DIR, "Quicksand-Regular.ttf")
+    _quick_bold = os.path.join(_FONT_DIR, "Quicksand-Bold.ttf")
+    label_font = ImageFont.truetype(_mono, 16)
+    label_font_sml = ImageFont.truetype(_mono, 12)
+    label_font_mid = ImageFont.truetype(_mono, 20)
+    label_font_lg = ImageFont.truetype(_mono, 24)
+    value_font = ImageFont.truetype(_quick, 24)
+    value_font_med = ImageFont.truetype(_quick, 28)
+    value_font_lg = ImageFont.truetype(_quick, 36)
+    value_font_lg_bold = ImageFont.truetype(_quick_bold, 36)
 except Exception as e:
     # If the font files are missing, fall back to PIL's built-in font so the
     # display degrades gracefully instead of crashing later with NameError on
@@ -54,7 +68,8 @@ def memory_label(bank_name: str) -> str:
     return custom if custom else ("TARGET %s" % bank_name)
 
 # --- LOGO CONFIGURATION ---
-IMG_DIR="/opt/lm-bbw/lib/img/"
+# App-specific images (La Marzocco logo, lion, cup, warning) in app/img/.
+IMG_DIR = _APP_IMG_DIR + os.sep
 
 logo_img = None
 coffee_cup_img = None
@@ -111,7 +126,8 @@ VENDOR_COLORS = {'acaia': '#6FB7E8', 'bookoo': '#E8913A'}
 vendor_logos = {}
 try:
     for _v in VENDOR_LABELS:
-        _p = IMG_DIR + "%s.png" % _v
+        # Vendor badges are shared brand assets: common/img/<vendor>.png
+        _p = os.path.join(_COMMON_IMG_DIR, "%s.png" % _v)
         if os.path.exists(_p):
             _raw = Image.open(_p).convert("RGBA")
             _target_h = 20
@@ -506,7 +522,7 @@ class Display:
     def __update_display(self):
         # Hardware init
         try:
-            from lib import LCD_2inch4, LCD_2inch
+            from common.lcd import LCD_2inch4, LCD_2inch
             if self.display_size == DisplaySize.SIZE_2_4:
                 self.lcd = LCD_2inch4.LCD_2inch4()
             elif self.display_size == DisplaySize.SIZE_2_0:

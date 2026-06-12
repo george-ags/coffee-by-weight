@@ -37,7 +37,7 @@ import struct
 import gc
 from typing import Optional, List, Tuple
 
-from lib.ble import adapter_scan_lock
+from common.ble import adapter_scan_lock
 
 try:
     import simplepyble

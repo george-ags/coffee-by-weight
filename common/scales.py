@@ -24,9 +24,9 @@ except ImportError:
     logging.fatal("SimplePyBLE not installed. Run: pip3 install simplepyble")
     raise
 
-from lib.scale_acaia import AcaiaScale, ACAIA_NAME_PREFIXES
-from lib.scale_bookoo import BookooScale, BOOKOO_NAME_PREFIXES
-from lib.ble import adapter_scan_lock
+from common.scale_acaia import AcaiaScale, ACAIA_NAME_PREFIXES
+from common.scale_bookoo import BookooScale, BOOKOO_NAME_PREFIXES
+from common.ble import adapter_scan_lock
 
 # vendor key -> (display label, name-prefix list, constructor)
 VENDORS = {

@@ -1,0 +1,19 @@
+[Unit]
+Description=GRIND-BW - grind-by-weight controller
+BindsTo=bluetooth.target
+After=bluetooth.target
+
+[Service]
+# Reset Bluetooth adapter on start (clears stale connections).
+ExecStartPre=/bin/sh -c 'rfkill unblock bluetooth; bluetoothctl power off; sleep 1; bluetoothctl power on; sleep 2'
+
+ExecStart=python3 /opt/grind-bw/grind-bw.py
+EnvironmentFile=/etc/default/grind-bw.env
+WorkingDirectory=/opt/grind-bw
+Restart=always
+TimeoutSec=10
+MemoryMax=336M
+User=root
+
+[Install]
+WantedBy=multi-user.target

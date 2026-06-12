@@ -11,7 +11,7 @@ from typing import Optional, Callable
 
 from gpiozero import Button, DigitalOutputDevice
 
-from lib.scales import Scale, find_all_scales, find_all_devices, DEFAULT_VENDOR
+from common.scales import Scale, find_all_scales, find_all_devices, DEFAULT_VENDOR
 
 default_target = 36.0
 default_overshoot = 1.0

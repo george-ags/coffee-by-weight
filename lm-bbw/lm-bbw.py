@@ -11,11 +11,11 @@ from multiprocessing import Queue
 from timeit import default_timer as timer
 from typing import Optional
 
-from lib import control
-from lib.control import ControlManager
-from lib.display import Display, DisplayData, DisplaySize
-from lib.scales import Scale
-from lib.webserver import WebServer
+from app import control
+from app.control import ControlManager
+from app.display import Display, DisplayData, DisplaySize
+from common.scales import Scale
+from app.webserver import WebServer
 
 WEB_PORT = 80
 WEB_DIR = '/opt/lm-bbw/web'
