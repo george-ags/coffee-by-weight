@@ -576,6 +576,24 @@ class ControlManager:
         logging.info("Switched memory bank %s -> %s (target %.1fg, overshoot %.2fg)"
                       % (prev, new.name, new.target, new.overshoot))
 
+    def reset_to_first_memory(self):
+        """
+        Rotate the banks so the first profile ("A") is active. Called when a
+        scale connects, so every session starts from the first profile
+        regardless of which bank was active before the last disconnect.
+        """
+        if not self.memories:
+            return
+        first_name = "A"
+        if self.memories[0].name == first_name:
+            return
+        for _ in range(len(self.memories)):
+            if self.memories[0].name == first_name:
+                break
+            self.memories.rotate(-1)
+        logging.info("Scale connected -> resetting to first memory bank %s (target %.1fg)"
+                     % (self.memories[0].name, self.memories[0].target))
+
     def _start_shot(self):
         # Take the lock only around the relay transition. The auto-tare (a BLE
         # write that can block) happens AFTER releasing the lock, so a slow or
@@ -606,7 +624,13 @@ class ControlManager:
 
 def try_connect_scale(scale: Scale, mgr: ControlManager) -> bool:
     try:
+        was_connected = mgr.scale_is_connected_flag
         mgr.scale_is_connected_flag = scale.connected
+
+        # On the disconnected -> connected edge, always start the session from
+        # the first memory profile, regardless of which was active before.
+        if scale.connected and not was_connected:
+            mgr.reset_to_first_memory()
 
         if not mgr.should_scale_connect():
             if scale.connected:
