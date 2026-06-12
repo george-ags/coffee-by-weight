@@ -29,6 +29,14 @@ MAX_OVERSHOOT           = 5.0    # physical ceiling on drip-out margin
 # Weight delta (g) that counts as user activity for the auto-sleep timer
 ACTIVITY_WEIGHT_THRESHOLD = float(os.environ.get('ACTIVITY_WEIGHT_THRESHOLD', '0.3'))
 
+# How long after relay-off we keep recording flow samples. Tied to the
+# display's drip-out window (same env var) plus a margin, so the graph captures
+# the flow decaying to zero before it freezes.
+try:
+    DRIP_OUT_CAPTURE_SECONDS = float(os.environ.get('DRIP_OUT_WINDOW', '3.5')) + 0.5
+except (TypeError, ValueError):
+    DRIP_OUT_CAPTURE_SECONDS = 4.0
+
 
 class TargetMemory:
     def __init__(self, name: str, color="#ff1303"):
@@ -498,7 +506,12 @@ class ControlManager:
         return self.relay.value
 
     def add_flow_rate_data(self, data_point: float):
-        if self.relay_on() or self.relay_off_time + 3.0 > timer():
+        # Keep accepting samples through the whole drip-out window (plus a small
+        # margin) so the graph can show the flow decaying to zero before it
+        # freezes. This must not be shorter than the display's DRIP_OUT_WINDOW,
+        # otherwise the tail of the decay is dropped and the frozen graph ends
+        # mid-flow.
+        if self.relay_on() or self.relay_off_time + DRIP_OUT_CAPTURE_SECONDS > timer():
             self.flow_rate_data.append(data_point)
             if len(self.flow_rate_data) > self.flow_rate_max_points:
                 self.flow_rate_data.popleft()

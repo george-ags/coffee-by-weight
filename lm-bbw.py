@@ -231,6 +231,8 @@ def main():
     logging.info("Exiting on stop")
 
 
+TARE_SETTLE_SECONDS = 1.5
+
 def update_display(scale: Scale, mgr: ControlManager, display: Display, last_time: float, last_weight: float, timeout_stop: bool = False, force_ready: bool = False) -> (float, float):
     now = timer()
     weight = scale.weight
@@ -239,7 +241,20 @@ def update_display(scale: Scale, mgr: ControlManager, display: Display, last_tim
         sample_rate = now - last_time
         changed = weight - last_weight
         g_per_s = round(1 / sample_rate * changed, 1)
-        mgr.add_flow_rate_data(g_per_s)
+
+        shot_elapsed = mgr.shot_time_elapsed()
+        if mgr.relay_on() and shot_elapsed < TARE_SETTLE_SECONDS:
+            # Shot just started: the auto-tare lands asynchronously a moment
+            # later and steps the weight down (e.g. cup weight -> 0), which
+            # would register as a large negative flow spike. Skip these samples
+            # and let the post-tare weight become the new baseline.
+            pass
+        else:
+            # During a shot, weight only increases; a negative reading here is
+            # scale noise or a late tare step, so clamp it to zero.
+            if mgr.relay_on() and g_per_s < 0:
+                g_per_s = 0.0
+            mgr.add_flow_rate_data(g_per_s)
     data = DisplayData(weight, sample_rate, mgr.current_memory(), mgr.flow_rate_data,
                        scale.battery, mgr.relay_on(), mgr.shot_time_elapsed(),
                        mgr.image_needs_save, smoothing, timeout_stop=timeout_stop, force_ready=force_ready,
