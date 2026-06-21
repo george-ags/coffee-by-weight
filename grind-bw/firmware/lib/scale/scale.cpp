@@ -16,6 +16,8 @@
 #include "scale.h"
 #include <NimBLEDevice.h>
 #include <vector>
+#include <cstring>
+#include <strings.h>
 
 CoffeeScale g_scale;
 
@@ -106,30 +108,43 @@ static float acaiaDecodeWeight(const uint8_t* p, size_t n) {
 }
 
 // ===========================================================================
-// NimBLE scan-callback glue
+// Discovery store — every supported scale seen in the last scan.
+// Written from the NimBLE host task (scan callbacks), read from the UI task,
+// so the public list is guarded by a spinlock. The parallel address array is
+// only touched in the BLE task and holds the properly-typed NimBLEAddress used
+// to connect (preserves random vs public addressing that coffee scales use).
 // ===========================================================================
-static String                 s_foundMac;
-static Vendor                 s_foundVendor = Vendor::NONE;
-static String                 s_targetMac;   // when set, match this address exactly
-static NimBLEAdvertisedDevice  s_adv;          // copy of the matched device
-static bool                    s_haveAdv = false;
+struct FoundDev { char name[32]; char mac[18]; Vendor vendor; };
+static const int      MAX_FOUND = 10;
+static FoundDev       s_found[MAX_FOUND];
+static int            s_foundCount = 0;
+static portMUX_TYPE   s_foundMux = portMUX_INITIALIZER_UNLOCKED;
+static NimBLEAddress  s_foundAddr[MAX_FOUND];
 
-// Connect via the captured advertised device (not a rebuilt address) so the
-// peripheral's address TYPE — random vs public — is preserved. Coffee scales
-// typically use random addresses, which a string-built public address can't
-// reach.
+static void addFound(const NimBLEAddress& addr, const char* name, Vendor v) {
+  std::string macs = addr.toString();              // heap work BEFORE the lock
+  int idx = -1;
+  portENTER_CRITICAL(&s_foundMux);
+  for (int i = 0; i < s_foundCount; i++)
+    if (strcasecmp(s_found[i].mac, macs.c_str()) == 0) { idx = i; break; }
+  if (idx < 0 && s_foundCount < MAX_FOUND) idx = s_foundCount++;
+  if (idx >= 0) {
+    strncpy(s_found[idx].mac,  macs.c_str(), sizeof(s_found[idx].mac) - 1);
+    s_found[idx].mac[sizeof(s_found[idx].mac) - 1] = 0;
+    strncpy(s_found[idx].name, (name && *name) ? name : "(unnamed)", sizeof(s_found[idx].name) - 1);
+    s_found[idx].name[sizeof(s_found[idx].name) - 1] = 0;
+    s_found[idx].vendor = v;
+  }
+  portEXIT_CRITICAL(&s_foundMux);
+  if (idx >= 0) s_foundAddr[idx] = addr;            // BLE-task-only, safe outside lock
+}
+
+// Collect ALL supported scales; does not stop the scan early.
 class ScanCB : public NimBLEAdvertisedDeviceCallbacks {
   void onResult(NimBLEAdvertisedDevice* dev) override {
-    String addr = dev->getAddress().toString().c_str();
     Vendor v = classify(dev->haveName() ? dev->getName() : std::string());
-    bool match = s_targetMac.length() ? addr.equalsIgnoreCase(s_targetMac)
-                                       : (v != Vendor::NONE);
-    if (match) {
-      s_adv = *dev; s_haveAdv = true;
-      s_foundMac = addr;
-      s_foundVendor = (v != Vendor::NONE ? v : s_foundVendor);
-      NimBLEDevice::getScan()->stop();
-    }
+    if (v == Vendor::NONE) return;
+    addFound(dev->getAddress(), dev->haveName() ? dev->getName().c_str() : "", v);
   }
 };
 
@@ -161,9 +176,13 @@ void CoffeeScale::begin(const String& savedMac, Vendor savedVendor,
 
 void CoffeeScale::_bleTask() {
   for (;;) {
+    if (_reconnect) {                 // user picked a scale or asked to rescan
+      _reconnect = false;
+      if (connected) dropConnection();
+    }
     if (!connected) {
       scanAndConnect();
-      if (!connected) { vTaskDelay(pdMS_TO_TICKS(1500)); continue; }
+      if (!connected) { vTaskDelay(pdMS_TO_TICKS(1200)); continue; }
     }
     serviceLink();
     vTaskDelay(pdMS_TO_TICKS(200));
@@ -171,8 +190,9 @@ void CoffeeScale::_bleTask() {
 }
 
 bool CoffeeScale::scanAndConnect() {
-  s_foundMac = ""; s_foundVendor = Vendor::NONE; s_haveAdv = false;
-  s_targetMac = _mac;   // empty => discover any supported scale
+  portENTER_CRITICAL(&s_foundMux);          // fresh discovery list for this scan
+  s_foundCount = 0;
+  portEXIT_CRITICAL(&s_foundMux);
 
   NimBLEScan* scan = NimBLEDevice::getScan();
   static ScanCB cb;
@@ -180,18 +200,32 @@ bool CoffeeScale::scanAndConnect() {
   scan->setActiveScan(true);
   scan->setInterval(100);
   scan->setWindow(80);
-  scan->start(_scanSeconds, false);
+  scan->start(_scanSeconds, false);         // runs full duration, collecting all
   scan->clearResults();
+  _scanGen++;                               // signal the UI that discovery refreshed
 
-  if (!s_haveAdv) return false;
+  // Pick the saved/target scale if it's present, otherwise the first found.
+  int pick = -1;
+  FoundDev chosen{};
+  portENTER_CRITICAL(&s_foundMux);
+  int n = s_foundCount;
+  if (_mac.length())
+    for (int i = 0; i < n; i++)
+      if (strcasecmp(s_found[i].mac, _mac.c_str()) == 0) { pick = i; break; }
+  if (pick < 0 && n > 0) pick = 0;
+  if (pick >= 0) chosen = s_found[pick];
+  portEXIT_CRITICAL(&s_foundMux);
 
-  _mac = s_foundMac;
-  if (s_foundVendor != Vendor::NONE) vendor = s_foundVendor;
+  if (pick < 0) return false;               // no supported scale in range
+
+  _mac   = chosen.mac;
+  vendor = chosen.vendor;
+  NimBLEAddress addr = s_foundAddr[pick];
   Serial.printf("[scale] connecting to %s (%s)\n", _mac.c_str(), vendorName());
 
   NimBLEClient* client = NimBLEDevice::createClient();
   _client = client;
-  if (!client->connect(&s_adv)) {     // preserves random/public address type
+  if (!client->connect(addr)) {             // typed address preserves random/public
     Serial.println("[scale] connect failed");
     NimBLEDevice::deleteClient(client); _client = nullptr;
     return false;
@@ -204,6 +238,30 @@ bool CoffeeScale::scanAndConnect() {
   Serial.println("[scale] connected");
   return true;
 }
+
+// ---- discovery / selection (used by the settings picker) -------------------
+int CoffeeScale::discoveredCount() {
+  portENTER_CRITICAL(&s_foundMux);
+  int n = s_foundCount;
+  portEXIT_CRITICAL(&s_foundMux);
+  return n;
+}
+
+bool CoffeeScale::discoveredAt(int i, String& name, String& mac, Vendor& v) {
+  FoundDev tmp{}; bool ok = false;
+  portENTER_CRITICAL(&s_foundMux);
+  if (i >= 0 && i < s_foundCount) { tmp = s_found[i]; ok = true; }
+  portEXIT_CRITICAL(&s_foundMux);
+  if (!ok) return false;
+  name = tmp.name; mac = tmp.mac; v = tmp.vendor;   // String build outside the lock
+  return true;
+}
+
+void CoffeeScale::selectScale(const String& mac, Vendor v) {
+  _mac = mac; vendor = v; _reconnect = true;        // drop + reconnect to this one
+}
+
+void CoffeeScale::rescan() { _reconnect = true; }   // refresh discovery, reconnect
 
 bool CoffeeScale::setupBookoo() {
   auto* client = static_cast<NimBLEClient*>(_client);

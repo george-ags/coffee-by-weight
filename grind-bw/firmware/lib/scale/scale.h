@@ -45,6 +45,14 @@ class CoffeeScale {
 
   const char* vendorName() const;
 
+  // --- discovery / selection (for the settings picker) ----------------------
+  // Every supported scale seen in the most recent scan.
+  int  discoveredCount();
+  bool discoveredAt(int i, String& name, String& mac, Vendor& v);
+  void selectScale(const String& mac, Vendor v);  // choose one; drops + reconnects
+  void rescan();                                   // refresh discovery + reconnect
+  uint32_t scanGeneration() const { return _scanGen; }  // bumps after each scan
+
   // Called internally by the BLE task — public only so the C-style NimBLE
   // callbacks can reach them.
   void _onNotify(const uint8_t* data, size_t len);
@@ -64,6 +72,10 @@ class CoffeeScale {
   bool          _acaiaPyxis = false;
   uint32_t      _lastHeartbeat = 0;
   uint32_t      _heartbeatCount = 0;
+
+  // discovery / selection
+  volatile bool     _reconnect = false;   // request: drop link + scan/reconnect
+  volatile uint32_t _scanGen   = 0;        // increments each completed scan
 
   bool scanAndConnect();
   bool setupAcaia();
