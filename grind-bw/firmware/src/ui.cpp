@@ -247,7 +247,7 @@ void ui_update() {
   bool conn = g_scale.connected;
 
   // round start/stop button
-  if (st == GrindState::GRINDING) {
+  if (st == GrindState::GRINDING || st == GrindState::TARING) {
     lv_obj_set_style_bg_color(btn_start, COL_RED_DK, 0);
     lv_obj_clear_state(btn_start, LV_STATE_DISABLED);
     lv_obj_add_state(btn_minus, LV_STATE_DISABLED);
@@ -275,7 +275,9 @@ void ui_update() {
   }
 
   // message line
-  if (st == GrindState::GRINDING) {
+  if (st == GrindState::TARING) {
+    lv_label_set_text(lbl_msg, "taring...");
+  } else if (st == GrindState::GRINDING) {
     char m[40]; snprintf(m, sizeof(m), "grinding  %.1fs", g_grinder.elapsed());
     lv_label_set_text(lbl_msg, m);
   } else if (st == GrindState::DONE) {

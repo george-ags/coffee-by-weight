@@ -47,6 +47,10 @@
 // reading the final weight for overshoot learning.
 #define SETTLE_SECONDS          1.5f
 
+// On START: tare the scale, then wait this long before running the motor, so
+// the tare settles and the dose is counted from a true zero.
+#define PRE_GRIND_TARE_MS       1000
+
 // ===========================================================================
 // 3. BLE SCALE   (passed into the standalone `scale` library via begin())
 // ===========================================================================

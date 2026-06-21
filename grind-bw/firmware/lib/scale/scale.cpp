@@ -153,6 +153,19 @@ static void notifyTrampoline(NimBLERemoteCharacteristic*, uint8_t* data, size_t 
   g_scale._onNotify(data, len);
 }
 
+// Client callbacks. NimBLE 1.4.x doesn't pass a disconnect reason (that's a
+// 2.x feature), but knowing *when* the link drops relative to the setup traces
+// below already localizes the problem (link-level vs post-handshake).
+class ClientCB : public NimBLEClientCallbacks {
+  void onConnect(NimBLEClient*) override {
+    Serial.println("[scale] link up");
+  }
+  void onDisconnect(NimBLEClient*) override {
+    Serial.println("[scale] link down");
+  }
+};
+static ClientCB s_clientCB;
+
 // ===========================================================================
 // CoffeeScale
 // ===========================================================================
@@ -225,11 +238,16 @@ bool CoffeeScale::scanAndConnect() {
 
   NimBLEClient* client = NimBLEDevice::createClient();
   _client = client;
+  client->setClientCallbacks(&s_clientCB, false);
+  // Conservative params + generous (4 s) supervision timeout for link stability.
+  // Units: interval x1.25ms (12..24 = 15..30ms), latency 0, timeout x10ms (400 = 4s).
+  client->setConnectionParams(12, 24, 0, 400);
   if (!client->connect(addr)) {             // typed address preserves random/public
     Serial.println("[scale] connect failed");
     NimBLEDevice::deleteClient(client); _client = nullptr;
     return false;
   }
+  Serial.println("[scale] connected link, discovering services…");
 
   bool ok = (vendor == Vendor::BOOKOO) ? setupBookoo() : setupAcaia();
   if (!ok) { dropConnection(); return false; }
@@ -266,12 +284,13 @@ void CoffeeScale::rescan() { _reconnect = true; }   // refresh discovery, reconn
 bool CoffeeScale::setupBookoo() {
   auto* client = static_cast<NimBLEClient*>(_client);
   NimBLERemoteService* svc = client->getService(BOOKOO_SVC);
-  if (!svc) return false;
+  if (!svc) { Serial.println("[scale] BooKoo service FFE0 not found"); return false; }
   auto* notify = svc->getCharacteristic(BOOKOO_NOTIFY);
   auto* write  = svc->getCharacteristic(BOOKOO_WRITE);
-  if (!notify || !write) return false;
+  if (!notify || !write) { Serial.println("[scale] BooKoo chars not found"); return false; }
   _notifyChar = notify; _writeChar = write;
-  if (!notify->subscribe(true, notifyTrampoline)) return false;
+  if (!notify->subscribe(true, notifyTrampoline)) { Serial.println("[scale] BooKoo subscribe failed"); return false; }
+  Serial.println("[scale] BooKoo subscribed");
   return true;
 }
 
@@ -280,27 +299,37 @@ bool CoffeeScale::setupAcaia() {
   NimBLERemoteCharacteristic* found = nullptr;
   _acaiaPyxis = false;
 
-  // The service UUID is not fixed: scan every service for the known char.
+  // The service UUID is not fixed, so scan every service for the known write/
+  // notify characteristic. Dump everything we find so an unrecognized layout is
+  // visible in the log.
   std::vector<NimBLERemoteService*>* services = client->getServices(true);
-  if (!services) return false;
+  if (!services || services->empty()) {
+    Serial.println("[scale] discovery returned NO services");
+    return false;
+  }
+  Serial.printf("[scale] %u services discovered:\n", (unsigned)services->size());
   for (auto* svc : *services) {
+    Serial.printf("  svc %s\n", svc->getUUID().toString().c_str());
     auto* chars = svc->getCharacteristics(true);
-    if (!chars) continue;
+    if (!chars) { Serial.println("    (no characteristics)"); continue; }
     for (auto* ch : *chars) {
       std::string u = ch->getUUID().toString();
+      Serial.printf("    chr %s%s%s\n", u.c_str(),
+                    ch->canNotify() ? " [notify]" : "",
+                    (ch->canWrite() || ch->canWriteNoResponse()) ? " [write]" : "");
       for (auto& c : u) c = tolower((unsigned char)c);
-      if (u.find("49535343-8841-43f4-a8d4-ecbe34729bb3") != std::string::npos) {
-        found = ch; _acaiaPyxis = true; break;
-      } else if (u.find("00002a80-0000-1000-8000-00805f9b34fb") != std::string::npos) {
-        found = ch; _acaiaPyxis = false; break;
+      if (u.find("49535343-8841") != std::string::npos) {        // Pyxis/Lunar-2021
+        found = ch; _acaiaPyxis = true;
+      } else if (!found && u.find("2a80") != std::string::npos) { // older Acaia
+        found = ch; _acaiaPyxis = false;
       }
     }
-    if (found) break;
   }
-  if (!found) return false;
+  if (!found) { Serial.println("[scale] no known Acaia characteristic in the list above"); return false; }
 
   _notifyChar = found; _writeChar = found;
-  if (!found->subscribe(true, notifyTrampoline)) return false;
+  if (!found->subscribe(true, notifyTrampoline)) { Serial.println("[scale] Acaia subscribe failed"); return false; }
+  Serial.printf("[scale] Acaia char found (%s), sending handshake\n", _acaiaPyxis ? "pyxis" : "old");
 
   // Handshake (ID, notification request x2, heartbeat).
   auto id  = acaiaId(_acaiaPyxis);    writeRaw(id.data(), id.size());     delay(200);

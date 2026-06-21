@@ -11,7 +11,7 @@
 
 #include <Arduino.h>
 
-enum class GrindState : uint8_t { IDLE, GRINDING, DONE };
+enum class GrindState : uint8_t { IDLE, TARING, GRINDING, DONE };
 
 class Grinder {
  public:
@@ -39,6 +39,7 @@ class Grinder {
   bool  _timedOut = false;
 
   uint32_t _startMs = 0;
+  uint32_t _tareMs  = 0;
   uint32_t _doneMs  = 0;
   bool     _settled = false;
 

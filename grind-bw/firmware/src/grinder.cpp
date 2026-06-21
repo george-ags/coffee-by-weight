@@ -1,7 +1,7 @@
 // grinder.cpp
 #include "grinder.h"
 #include "config.h"
-#include "scale.h"
+#include <scale.h>
 #include <Preferences.h>
 
 Grinder g_grinder;
@@ -46,26 +46,25 @@ void Grinder::start() {
   if (_state != GrindState::IDLE) return;
   if (!g_scale.connected) return;               // need a scale to weigh against
   g_scale.tare();                               // count only the dose
-  delay(50);
   _timedOut = false;
   _finalWeight = 0;
   _settled = false;
-  _startMs = millis();
-  _state = GrindState::GRINDING;
-  motor(true);
-  Serial.printf("[grind] start target=%.1f overshoot=%.2f\n", _target, _overshoot);
+  _tareMs = millis();
+  _state = GrindState::TARING;                  // motor stays OFF until tare settles
+  motor(false);
+  Serial.printf("[grind] tare; waiting %d ms before motor\n", PRE_GRIND_TARE_MS);
 }
 
 void Grinder::stop() {
   motor(false);
-  if (_state == GrindState::GRINDING) {
+  if (_state == GrindState::GRINDING || _state == GrindState::TARING) {
     Serial.println("[grind] aborted by user");
     _state = GrindState::IDLE;
   }
 }
 
 float Grinder::elapsed() const {
-  if (_state == GrindState::IDLE) return 0.0f;
+  if (_state != GrindState::GRINDING) return 0.0f;   // grind time only, not the tare wait
   return (millis() - _startMs) / 1000.0f;
 }
 
@@ -85,6 +84,21 @@ void Grinder::learnOvershoot(float settledWeight) {
 
 void Grinder::update(float weight, bool scaleConnected) {
   switch (_state) {
+    case GrindState::TARING: {
+      if (!scaleConnected) {                    // lost the scale during tare -> abort
+        motor(false);
+        _state = GrindState::IDLE;
+        return;
+      }
+      if (millis() - _tareMs >= (uint32_t)PRE_GRIND_TARE_MS) {
+        _startMs = millis();
+        _state = GrindState::GRINDING;
+        motor(true);
+        Serial.printf("[grind] start target=%.1f overshoot=%.2f\n", _target, _overshoot);
+      }
+      break;
+    }
+
     case GrindState::GRINDING: {
       // Safety: lost the scale mid-grind -> cannot weigh -> stop immediately.
       if (!scaleConnected) {
