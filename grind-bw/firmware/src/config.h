@@ -27,25 +27,30 @@
 #define TARGET_MAX_G           60.0f
 #define TARGET_STEP_G           0.5f   // +/- button step
 
-// Cut the motor this many grams BEFORE the target to account for coffee still
-// in flight plus burr/motor spin-down. Refined automatically after each good
-// grind (see grinder.cpp) and persisted to flash.
-#define OVERSHOOT_DEFAULT_G     0.6f
-#define OVERSHOOT_MIN_G         0.0f
-#define OVERSHOOT_MAX_G         3.0f
-#define OVERSHOOT_LEARN_RATE    0.25f  // EMA factor applied to each error
+// --- Fine-approach dosing -------------------------------------------------
+// Coarse phase runs the motor until APPROACH_MARGIN_G *before* the target, then
+// stops and lets the weight settle. If the settled weight is still below target,
+// the motor is pulsed in short bursts (PULSE_MS) — settle, check, repeat — until
+// the target is reached. Precise without relying on a learned overshoot.
+#define APPROACH_MARGIN_G       0.5f    // coarse cut this far below target
+#define PULSE_MS                100     // motor burst length per fine pulse
+#define TARGET_EPSILON_G        0.05f   // target counts as reached within this
+#define MAX_FINE_PULSES         40      // safety cap on number of pulses
 
-// Safety: hard ceiling on a single grind. If the target is never reached the
-// motor is cut and the grind is marked timed-out (not learned from).
+// "Settled" detection between stops/pulses: wait at least PULSE_SETTLE_MIN_MS,
+// then treat the reading as stable once it hasn't moved more than
+// SETTLE_STABLE_DELTA_G for SETTLE_STABLE_HOLD_MS (capped at SETTLE_MAX_MS).
+#define PULSE_SETTLE_MIN_MS     400
+#define SETTLE_STABLE_DELTA_G   0.05f
+#define SETTLE_STABLE_HOLD_MS   300
+#define SETTLE_MAX_MS           2000
+
+// Safety: hard ceiling on a whole grind (coarse + all pulses). If the target is
+// never reached, the motor is cut and the grind is marked timed-out.
 #define MAX_GRIND_SECONDS      40.0f
 
-// A grind whose settled weight is off target by >= this is treated as bad: not
-// used to update the learned overshoot.
-#define OFF_TARGET_REJECT_G     2.0f
-
-// After the motor stops, wait this long for grounds in flight to settle before
-// reading the final weight for overshoot learning.
-#define SETTLE_SECONDS          1.5f
+// How long the DONE result is shown before returning to idle.
+#define DONE_HOLD_MS            3000
 
 // On START: tare the scale, then wait this long before running the motor, so
 // the tare settles and the dose is counted from a true zero.

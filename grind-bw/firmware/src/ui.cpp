@@ -246,8 +246,10 @@ void ui_update() {
   GrindState st = g_grinder.state();
   bool conn = g_scale.connected;
 
-  // round start/stop button
-  if (st == GrindState::GRINDING || st == GrindState::TARING) {
+  // round start/stop button — active during tare, coarse, settle and pulse
+  bool grinding = (st == GrindState::GRINDING || st == GrindState::TARING ||
+                   st == GrindState::SETTLING || st == GrindState::PULSING);
+  if (grinding) {
     lv_obj_set_style_bg_color(btn_start, COL_RED_DK, 0);
     lv_obj_clear_state(btn_start, LV_STATE_DISABLED);
     lv_obj_add_state(btn_minus, LV_STATE_DISABLED);
@@ -280,6 +282,8 @@ void ui_update() {
   } else if (st == GrindState::GRINDING) {
     char m[40]; snprintf(m, sizeof(m), "grinding  %.1fs", g_grinder.elapsed());
     lv_label_set_text(lbl_msg, m);
+  } else if (st == GrindState::SETTLING || st == GrindState::PULSING) {
+    lv_label_set_text(lbl_msg, "approaching target...");
   } else if (st == GrindState::DONE) {
     char m[48];
     if (g_grinder.timedOut())
