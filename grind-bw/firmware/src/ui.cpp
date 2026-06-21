@@ -16,7 +16,7 @@
 
 // ---- palette ----
 static lv_color_t COL_BG, COL_FG, COL_DIM, COL_ACCENT, COL_RED, COL_RED_DK,
-                  COL_GREEN, COL_YELLOW;
+                  COL_GREEN, COL_YELLOW, COL_BLUE;
 
 // ---- main-screen widgets ----
 static lv_obj_t *lbl_weight, *lbl_weight_u;
@@ -91,6 +91,7 @@ void ui_create() {
   COL_RED_DK = lv_color_hex(0x8E2020);
   COL_GREEN  = lv_color_hex(0x1FB55F);
   COL_YELLOW = lv_color_hex(0xE0B020);
+  COL_BLUE   = lv_color_hex(0x2E9BFF);
 
   lv_obj_t* scr = lv_scr_act();
   lv_obj_set_style_bg_color(scr, COL_BG, 0);
@@ -263,7 +264,7 @@ void ui_update() {
   }
 
   // connectivity icon
-  lv_obj_set_style_text_color(lbl_conn, conn ? COL_GREEN : COL_DIM, 0);
+  lv_obj_set_style_text_color(lbl_conn, conn ? COL_BLUE : COL_DIM, 0);
 
   // battery (color-coded)
   if (conn) {
