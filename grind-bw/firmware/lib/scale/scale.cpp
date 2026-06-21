@@ -217,19 +217,30 @@ bool CoffeeScale::scanAndConnect() {
   scan->clearResults();
   _scanGen++;                               // signal the UI that discovery refreshed
 
-  // Pick the saved/target scale if it's present, otherwise the first found.
+  // Device selection:
+  //  • If a scale has been chosen (saved MAC set), connect ONLY to that one.
+  //    Never adopt a different scale just because it was found first, and don't
+  //    connect at all until the chosen one is in range.
+  //  • If nothing has ever been chosen (first run), adopt the first supported
+  //    scale found; it then becomes the saved/locked scale.
   int pick = -1;
   FoundDev chosen{};
   portENTER_CRITICAL(&s_foundMux);
   int n = s_foundCount;
-  if (_mac.length())
+  if (_mac.length()) {
     for (int i = 0; i < n; i++)
       if (strcasecmp(s_found[i].mac, _mac.c_str()) == 0) { pick = i; break; }
-  if (pick < 0 && n > 0) pick = 0;
+  } else if (n > 0) {
+    pick = 0;
+  }
   if (pick >= 0) chosen = s_found[pick];
   portEXIT_CRITICAL(&s_foundMux);
 
-  if (pick < 0) return false;               // no supported scale in range
+  if (pick < 0) {
+    if (_mac.length())
+      Serial.printf("[scale] chosen scale %s not in range; waiting\n", _mac.c_str());
+    return false;
+  }
 
   _mac   = chosen.mac;
   vendor = chosen.vendor;
