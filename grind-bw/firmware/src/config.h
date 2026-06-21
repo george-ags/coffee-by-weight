@@ -1,0 +1,93 @@
+// config.h — all pins and tunables for GRIND-BW on ESP32-S3.
+//
+// Two groups of settings:
+//   1. VERIFIED      — motor wiring and grind behaviour. These are correct for
+//                      your described setup and safe to trust.
+//   2. BOARD-SPECIFIC — the AMOLED + touch pins for the Waveshare
+//                      ESP32-S3-Touch-AMOLED-1.64. The values below are a best
+//                      guess; you MUST confirm them against Waveshare's wiki /
+//                      schematic / Arduino demo for this exact board. They are
+//                      isolated in board_display.cpp so a mismatch never
+//                      affects the scale or motor logic.
+#pragma once
+
+// ===========================================================================
+// 1. MOTOR  (VERIFIED — matches your wiring)
+// ===========================================================================
+// Grinder Pin 3 (motor control signal) -> ESP32-S3 GPIO 18.
+// Active-high: the motor RUNS while this pin is driven to ~3.3 V.
+#define MOTOR_PIN              18
+#define MOTOR_ACTIVE_HIGH      1     // 1 = HIGH runs the motor (your case)
+
+// ===========================================================================
+// 2. GRIND BEHAVIOUR  (VERIFIED — tune to taste)
+// ===========================================================================
+#define TARGET_DEFAULT_G       18.0f  // startup target dose
+#define TARGET_MIN_G            1.0f
+#define TARGET_MAX_G           60.0f
+#define TARGET_STEP_G           0.5f   // +/- button step
+
+// Cut the motor this many grams BEFORE the target to account for coffee still
+// in flight plus burr/motor spin-down. Refined automatically after each good
+// grind (see grinder.cpp) and persisted to flash.
+#define OVERSHOOT_DEFAULT_G     0.6f
+#define OVERSHOOT_MIN_G         0.0f
+#define OVERSHOOT_MAX_G         3.0f
+#define OVERSHOOT_LEARN_RATE    0.25f  // EMA factor applied to each error
+
+// Safety: hard ceiling on a single grind. If the target is never reached the
+// motor is cut and the grind is marked timed-out (not learned from).
+#define MAX_GRIND_SECONDS      40.0f
+
+// A grind whose settled weight is off target by >= this is treated as bad: not
+// used to update the learned overshoot.
+#define OFF_TARGET_REJECT_G     2.0f
+
+// After the motor stops, wait this long for grounds in flight to settle before
+// reading the final weight for overshoot learning.
+#define SETTLE_SECONDS          1.5f
+
+// ===========================================================================
+// 3. BLE SCALE   (passed into the standalone `scale` library via begin())
+// ===========================================================================
+#define BLE_DEVICE_NAME        "grind-bw"
+#define SCAN_SECONDS            4      // per scan attempt while searching
+// (The Acaia heartbeat interval is a protocol constant and lives inside the
+//  scale library, not here.)
+
+// ===========================================================================
+// 4. AMOLED DISPLAY  (BOARD-SPECIFIC — *** VERIFY AGAINST WAVESHARE ***)
+// ===========================================================================
+// Waveshare ESP32-S3-Touch-AMOLED-1.64: 280 x 456 CO5300 QSPI panel.
+// Portrait orientation assumed (tall). If your demo uses a rotation, set it in
+// board_display.cpp.
+#define LCD_WIDTH              280
+#define LCD_HEIGHT             456
+
+// QSPI pins for the CO5300 — PLACEHOLDERS. Copy the real values from the
+// Arduino_ESP32QSPI(...) / Arduino_CO5300(...) constructor in Waveshare's demo.
+#define LCD_CS                 9
+#define LCD_SCK                10
+#define LCD_SDIO0              11
+#define LCD_SDIO1              12
+#define LCD_SDIO2              13
+#define LCD_SDIO3              14
+#define LCD_RST                21
+#define LCD_TE                 -1     // tearing-effect line, -1 if unused
+#define LCD_BL                 -1     // backlight/EN; AMOLED often has none, -1
+
+// ===========================================================================
+// 5. CAPACITIVE TOUCH  (BOARD-SPECIFIC — *** VERIFY ***)
+// ===========================================================================
+// FocalTech FT3168 over I2C — values confirmed against a known build for this
+// exact board (jaapp/smart-grind-by-weight). Talks directly over Wire, no I/O
+// expander or reset line needed.
+#define TOUCH_I2C_ADDR         0x38
+#define TOUCH_SDA              47
+#define TOUCH_SCL              48
+#define TOUCH_RST              -1
+#define TOUCH_INT              -1
+// Set to 1 if X/Y come out mirrored/swapped once you can see the panel.
+#define TOUCH_SWAP_XY          0
+#define TOUCH_INVERT_X         0
+#define TOUCH_INVERT_Y         0

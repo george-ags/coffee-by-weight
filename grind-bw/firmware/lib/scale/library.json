@@ -1,0 +1,14 @@
+{
+  "name": "scale",
+  "version": "0.1.0",
+  "description": "Vendor-neutral Bluetooth coffee-scale client (Acaia + BooKoo) for ESP32 using NimBLE. Standalone: no dependency on the host application.",
+  "keywords": "ble, acaia, bookoo, scale, coffee, esp32",
+  "frameworks": "arduino",
+  "platforms": "espressif32",
+  "dependencies": {
+    "h2zero/NimBLE-Arduino": "^1.4.3"
+  },
+  "build": {
+    "libArchive": false
+  }
+}

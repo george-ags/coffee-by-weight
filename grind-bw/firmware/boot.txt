@@ -1,0 +1,54 @@
+--- Terminal on /dev/cu.usbmodem1101 | 115200 8-N-1
+--- Available filters and text transformations: debug, default, direct, esp32_exception_decoder, hexlify, log2file, nocontrol, printable, send_on_enter, time
+--- More details at https://bit.ly/pio-monitor-filters
+--- Quit: Ctrl+C | Menu: Ctrl+T | Help: Ctrl+T followed by Ctrl+H
+[444816][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[444849][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[444881][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[444913][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[444945][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[444977][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[445009][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[445041][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[445073][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[445105][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[445137][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[445169][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[445201][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[445233][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[445265][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[445297][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[445329][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[445361][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[445393][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[445425][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[445457][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[445489][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[445521][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[445553][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[445585][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[445617][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[445649][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[445681][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[445713][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[445745][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[445777][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[445809][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[445841][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[445873][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[445905][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[445937][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[445969][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[446001][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[446033][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[446065][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[446097][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[446129][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[446161][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[446193][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[446225][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[446257][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[446289][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[446321][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[446354][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
+[446387][E][Wire.cpp:515] requestFrom(): i2cWriteReadNonStop returned Error -1
