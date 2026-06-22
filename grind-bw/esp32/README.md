@@ -126,18 +126,24 @@ slice and print it directly.
 
 ## Repository layout
 
+This README covers `grind-bw/esp32/` — the ESP32 firmware build. It lives inside
+the larger coffee-by-weight repo, which also holds the Raspberry-Pi `lm-bbw`
+brew-by-weight app, the shared `common/` scale code, and protocol docs under
+`doc/`.
+
 ```
 grind-bw/
-├── README.md                 ← this file
-├── docs/
-│   ├── wiring-diagram.svg                 ← high-level schematic
-│   ├── ESP32-S3-wiring-diagram.png        ← detailed wiring
-│   └── Waveshare-AMOLED-1_64-adapter.stl  ← printable screen mount
-└── firmware/                 ← PlatformIO project
-    ├── platformio.ini
-    ├── include/lv_conf.h
-    ├── lib/scale/            ← reusable Acaia/BooKoo BLE driver
-    └── src/                  ← config, grinder, ui, board bring-up, main
+└── esp32/
+    ├── README.md                              ← this file
+    ├── docs/
+    │   ├── wiring-diagram.svg                 ← high-level schematic
+    │   ├── ESP32-S3-wiring-diagram.png        ← detailed wiring
+    │   └── Waveshare-AMOLED-1_64-adapter.stl  ← printable screen mount
+    └── firmware/                              ← PlatformIO project (run pio here)
+        ├── platformio.ini
+        ├── include/lv_conf.h
+        ├── lib/scale/                         ← reusable Acaia/BooKoo BLE driver
+        └── src/                               ← config, grinder, ui, board, main
 ```
 
 ## Credits
