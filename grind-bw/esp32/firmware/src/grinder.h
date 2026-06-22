@@ -14,6 +14,7 @@
 #include <Arduino.h>
 
 enum class GrindState : uint8_t { IDLE, TARING, GRINDING, SETTLING, PULSING, DONE };
+enum class GrindMode  : uint8_t { WEIGHT, TIME };
 
 class Grinder {
  public:
@@ -24,16 +25,21 @@ class Grinder {
   void update(float weight, bool scaleConnected);   // call every loop
 
   GrindState state() const { return _state; }
-  float target()      const { return _target; }
+  GrindMode  mode()  const { return _mode; }
+  void       setMode(GrindMode m);          // persisted; ignored mid-grind
+  float target()      const { return _target; }       // grams (weight mode)
+  float targetTime()  const { return _targetTime; }    // seconds (time mode)
   float finalWeight() const { return _finalWeight; }
   bool  timedOut()    const { return _timedOut; }
   float elapsed()     const;    // seconds since the motor first started (0 if idle)
 
-  void  adjustTarget(float deltaG);   // +/- button; clamps, snaps to step, persists
+  void  adjustTarget(int dir);   // +/- button (dir = +1 / -1); nudges the active target
 
  private:
   GrindState _state = GrindState::IDLE;
-  float _target      = 0;
+  GrindMode  _mode  = GrindMode::WEIGHT;
+  float _target      = 0;        // grams
+  float _targetTime  = 0;        // seconds
   float _finalWeight = 0;
   bool  _timedOut    = false;
 

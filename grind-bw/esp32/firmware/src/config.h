@@ -27,6 +27,13 @@
 #define TARGET_MAX_G           60.0f
 #define TARGET_STEP_G           0.5f   // +/- button step
 
+// Time-based dosing (alternative mode, selected in the settings screen): grind
+// for a fixed number of seconds. Doesn't need a scale.
+#define TIME_DEFAULT_S          8.0f
+#define TIME_MIN_S              0.5f
+#define TIME_MAX_S             30.0f
+#define TIME_STEP_S             0.1f   // +/- button step, 0.1 s resolution
+
 // --- Fine-approach dosing -------------------------------------------------
 // Coarse phase runs the motor until APPROACH_MARGIN_G *before* the target, then
 // stops and lets the weight settle. If the settled weight is still below target,

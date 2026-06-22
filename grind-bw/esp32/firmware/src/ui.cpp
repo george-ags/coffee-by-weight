@@ -38,6 +38,7 @@ static uint32_t  gear_last_ms = 0;
 // ---- settings modal ----
 static lv_obj_t *modal = nullptr;
 static lv_obj_t *modal_list = nullptr;
+static lv_obj_t *btn_mode_w = nullptr, *btn_mode_t = nullptr;
 static uint32_t  modal_gen = 0;
 
 static lv_color_t batt_color(int pct) {
@@ -54,11 +55,12 @@ static const char* batt_glyph(int p) {
 }
 
 // ---------- callbacks ----------
-static void minus_cb(lv_event_t*) { g_grinder.adjustTarget(-TARGET_STEP_G); }
-static void plus_cb (lv_event_t*) { g_grinder.adjustTarget(+TARGET_STEP_G); }
+static void minus_cb(lv_event_t*) { g_grinder.adjustTarget(-1); }
+static void plus_cb (lv_event_t*) { g_grinder.adjustTarget(+1); }
 static void start_cb(lv_event_t*) {
-  if (g_grinder.state() == GrindState::GRINDING) g_grinder.stop();
-  else                                           g_grinder.start();
+  GrindState s = g_grinder.state();
+  if (s != GrindState::IDLE && s != GrindState::DONE) g_grinder.stop();
+  else                                                g_grinder.start();
 }
 
 static void modal_open();
@@ -74,6 +76,16 @@ static void pick_cb  (lv_event_t* e) {
   if (g_scale.discoveredAt(idx, name, mac, v)) g_scale.selectScale(mac, v);
   modal_close();
 }
+
+// highlight the active grind-mode button
+static void refresh_mode_btns() {
+  if (!btn_mode_w || !btn_mode_t) return;
+  bool timeMode = (g_grinder.mode() == GrindMode::TIME);
+  lv_obj_set_style_bg_color(btn_mode_w, timeMode ? COL_ACCENT : COL_BLUE, 0);
+  lv_obj_set_style_bg_color(btn_mode_t, timeMode ? COL_BLUE  : COL_ACCENT, 0);
+}
+static void mode_w_cb(lv_event_t*) { g_grinder.setMode(GrindMode::WEIGHT); refresh_mode_btns(); }
+static void mode_t_cb(lv_event_t*) { g_grinder.setMode(GrindMode::TIME);   refresh_mode_btns(); }
 
 // ---------- helper ----------
 static lv_obj_t* mk_btn(lv_obj_t* parent, const char* txt, lv_event_cb_t cb,
@@ -243,10 +255,31 @@ static void modal_open() {
   lv_obj_t* title = lv_label_create(panel);
   lv_obj_set_style_text_color(title, COL_FG, 0);
   lv_obj_set_style_text_font(title, &lv_font_montserrat_20, 0);
-  lv_label_set_text(title, "Select scale");
+  lv_label_set_text(title, "Settings");
+
+  // grind-mode selector
+  lv_obj_t* mlbl = lv_label_create(panel);
+  lv_obj_set_style_text_color(mlbl, COL_DIM, 0);
+  lv_obj_set_style_text_font(mlbl, &lv_font_montserrat_14, 0);
+  lv_label_set_text(mlbl, "Grind mode");
+
+  lv_obj_t* mrow = lv_obj_create(panel);
+  lv_obj_remove_style_all(mrow);
+  lv_obj_set_size(mrow, LV_PCT(100), LV_SIZE_CONTENT);
+  lv_obj_set_flex_flow(mrow, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(mrow, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  btn_mode_w = mk_btn(mrow, "By weight", mode_w_cb, 108, 38, COL_ACCENT, &lv_font_montserrat_14, nullptr);
+  btn_mode_t = mk_btn(mrow, "By time",   mode_t_cb, 108, 38, COL_ACCENT, &lv_font_montserrat_14, nullptr);
+  refresh_mode_btns();
+
+  // scale picker
+  lv_obj_t* slbl = lv_label_create(panel);
+  lv_obj_set_style_text_color(slbl, COL_DIM, 0);
+  lv_obj_set_style_text_font(slbl, &lv_font_montserrat_14, 0);
+  lv_label_set_text(slbl, "Scale");
 
   modal_list = lv_obj_create(panel);
-  lv_obj_set_size(modal_list, LV_PCT(100), 270);
+  lv_obj_set_size(modal_list, LV_PCT(100), 170);
   lv_obj_set_flex_flow(modal_list, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_style_pad_row(modal_list, 6, 0);
   lv_obj_set_style_bg_opa(modal_list, LV_OPA_TRANSP, 0);
@@ -273,14 +306,29 @@ static void modal_close() {
 
 // ---------- per-loop refresh ----------
 void ui_update() {
-  char w[16]; snprintf(w, sizeof(w), "%.1f", g_scale.weight);
-  lv_label_set_text(lbl_weight, w);
+  GrindState st   = g_grinder.state();
+  GrindMode  mode = g_grinder.mode();
+  bool       conn = g_scale.connected;
 
-  char t[12]; snprintf(t, sizeof(t), "%.1f", g_grinder.target());  // no unit
-  lv_label_set_text(lbl_start, t);
-
-  GrindState st = g_grinder.state();
-  bool conn = g_scale.connected;
+  // top readout + unit + middle target depend on the mode
+  if (mode == GrindMode::TIME) {
+    // top is a countdown from the target time to zero once grinding starts
+    float rem = (st == GrindState::GRINDING) ? (g_grinder.targetTime() - g_grinder.elapsed())
+              : (st == GrindState::DONE     ? 0.0f
+                                            : g_grinder.targetTime());
+    if (rem < 0) rem = 0;
+    char w[12]; snprintf(w, sizeof(w), "%.1f", rem);
+    lv_label_set_text(lbl_weight, w);
+    lv_label_set_text(lbl_weight_u, "seconds");
+    char t[12]; snprintf(t, sizeof(t), "%.1f", g_grinder.targetTime());  // middle = target time
+    lv_label_set_text(lbl_start, t);
+  } else {
+    char w[16]; snprintf(w, sizeof(w), "%.1f", g_scale.weight);
+    lv_label_set_text(lbl_weight, w);
+    lv_label_set_text(lbl_weight_u, "gram");
+    char t[12]; snprintf(t, sizeof(t), "%.1f", g_grinder.target());      // middle = target dose
+    lv_label_set_text(lbl_start, t);
+  }
 
   // round start/stop button — active during tare, coarse, settle and pulse
   bool grinding = (st == GrindState::GRINDING || st == GrindState::TARING ||
@@ -294,8 +342,8 @@ void ui_update() {
     lv_obj_set_style_bg_color(btn_start, COL_RED, 0);
     lv_obj_clear_state(btn_minus, LV_STATE_DISABLED);
     lv_obj_clear_state(btn_plus,  LV_STATE_DISABLED);
-    if (conn) lv_obj_clear_state(btn_start, LV_STATE_DISABLED);
-    else      lv_obj_add_state(btn_start, LV_STATE_DISABLED);
+    if (mode == GrindMode::TIME || conn) lv_obj_clear_state(btn_start, LV_STATE_DISABLED);
+    else                                 lv_obj_add_state(btn_start, LV_STATE_DISABLED);
   }
 
   // spin the gear teeth while the motor is actually turning
@@ -324,7 +372,11 @@ void ui_update() {
   }
 
   // message line
-  if (st == GrindState::TARING) {
+  if (mode == GrindMode::TIME) {
+    if (st == GrindState::GRINDING)  lv_label_set_text(lbl_msg, "grinding...");
+    else if (st == GrindState::DONE) lv_label_set_text(lbl_msg, g_grinder.timedOut() ? "stopped (max time)" : "done");
+    else                             lv_label_set_text(lbl_msg, "ready - tap to grind");
+  } else if (st == GrindState::TARING) {
     lv_label_set_text(lbl_msg, "taring...");
   } else if (st == GrindState::GRINDING) {
     char m[40]; snprintf(m, sizeof(m), "grinding  %.1fs", g_grinder.elapsed());
