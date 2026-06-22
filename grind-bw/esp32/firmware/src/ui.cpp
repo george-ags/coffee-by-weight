@@ -16,7 +16,7 @@
 
 // ---- palette ----
 static lv_color_t COL_BG, COL_FG, COL_DIM, COL_ACCENT, COL_RED, COL_RED_DK,
-                  COL_GREEN, COL_YELLOW, COL_BLUE;
+                  COL_GREEN, COL_YELLOW, COL_BLUE, COL_TEETH;
 
 // ---- main-screen widgets ----
 static lv_obj_t *lbl_weight, *lbl_weight_u;
@@ -24,6 +24,16 @@ static lv_obj_t *btn_minus, *btn_plus;
 static lv_obj_t *btn_start, *lbl_start;          // round target / start-stop
 static lv_obj_t *lbl_conn, *lbl_batt, *btn_gear;
 static lv_obj_t *lbl_msg;
+
+// Gear teeth around the start button — small gray squares that spin while the
+// motor is turning (grinding / pulsing).
+#define GEAR_TEETH       12
+#define GEAR_RADIUS      58      // centre-to-tooth; keeps the whole tooth inside the rim
+#define GEAR_TOOTH_PX    12
+#define GEAR_DEG_PER_MS  0.24f   // ~one revolution every 1.5 s
+static lv_obj_t *teeth[GEAR_TEETH];
+static float     gear_angle   = 0;
+static uint32_t  gear_last_ms = 0;
 
 // ---- settings modal ----
 static lv_obj_t *modal = nullptr;
@@ -82,6 +92,15 @@ static lv_obj_t* mk_btn(lv_obj_t* parent, const char* txt, lv_event_cb_t cb,
   return b;
 }
 
+// Position tooth i around the gear centre, offset by rot_deg.
+static void place_tooth(int i, float rot_deg) {
+  float a = (360.0f / GEAR_TEETH) * (float)i + rot_deg;
+  float r = a * 0.01745329f;                 // degrees -> radians
+  lv_coord_t x = (lv_coord_t)lroundf(GEAR_RADIUS * cosf(r));
+  lv_coord_t y = (lv_coord_t)lroundf(GEAR_RADIUS * sinf(r));
+  lv_obj_align(teeth[i], LV_ALIGN_CENTER, x, y);
+}
+
 void ui_create() {
   COL_BG     = lv_color_hex(0x0B0B0E);
   COL_FG     = lv_color_hex(0xF2F2F2);
@@ -92,6 +111,7 @@ void ui_create() {
   COL_GREEN  = lv_color_hex(0x1FB55F);
   COL_YELLOW = lv_color_hex(0xE0B020);
   COL_BLUE   = lv_color_hex(0x2E9BFF);
+  COL_TEETH  = lv_color_hex(0x9AA0AA);
 
   lv_obj_t* scr = lv_scr_act();
   lv_obj_set_style_bg_color(scr, COL_BG, 0);
@@ -125,8 +145,23 @@ void ui_create() {
   btn_minus = mk_btn(trow, LV_SYMBOL_MINUS, minus_cb, 54, 54, COL_ACCENT, &lv_font_montserrat_20, nullptr);
   lv_obj_set_style_radius(btn_minus, LV_RADIUS_CIRCLE, 0);
 
+  // Red start/stop circle. The gray gear teeth are children of the button, so
+  // they sit on top of the red fill, just inside the rim, and spin while the
+  // motor is running.
   btn_start = mk_btn(trow, "0", start_cb, 132, 132, COL_RED, &lv_font_montserrat_48, &lbl_start);
   lv_obj_set_style_radius(btn_start, LV_RADIUS_CIRCLE, 0);
+  for (int i = 0; i < GEAR_TEETH; i++) {
+    lv_obj_t* t = lv_obj_create(btn_start);
+    lv_obj_remove_style_all(t);
+    lv_obj_set_size(t, GEAR_TOOTH_PX, GEAR_TOOTH_PX);
+    lv_obj_set_style_bg_color(t, COL_TEETH, 0);
+    lv_obj_set_style_bg_opa(t, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(t, 2, 0);
+    lv_obj_clear_flag(t, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(t, LV_OBJ_FLAG_SCROLLABLE);
+    teeth[i] = t;
+  }
+  for (int i = 0; i < GEAR_TEETH; i++) place_tooth(i, 0);   // static start position
 
   btn_plus = mk_btn(trow, LV_SYMBOL_PLUS, plus_cb, 54, 54, COL_ACCENT, &lv_font_montserrat_20, nullptr);
   lv_obj_set_style_radius(btn_plus, LV_RADIUS_CIRCLE, 0);
@@ -261,6 +296,17 @@ void ui_update() {
     lv_obj_clear_state(btn_plus,  LV_STATE_DISABLED);
     if (conn) lv_obj_clear_state(btn_start, LV_STATE_DISABLED);
     else      lv_obj_add_state(btn_start, LV_STATE_DISABLED);
+  }
+
+  // spin the gear teeth while the motor is actually turning
+  uint32_t now = millis();
+  if (gear_last_ms == 0) gear_last_ms = now;
+  uint32_t dt = now - gear_last_ms;
+  gear_last_ms = now;
+  if (st == GrindState::GRINDING || st == GrindState::PULSING) {
+    gear_angle += dt * GEAR_DEG_PER_MS;
+    while (gear_angle >= 360.0f) gear_angle -= 360.0f;
+    for (int i = 0; i < GEAR_TEETH; i++) place_tooth(i, gear_angle);
   }
 
   // connectivity icon
