@@ -154,7 +154,7 @@ void ui_create() {
   lv_obj_set_flex_flow(trow, LV_FLEX_FLOW_ROW);
   lv_obj_set_flex_align(trow, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
-  btn_minus = mk_btn(trow, LV_SYMBOL_MINUS, minus_cb, 54, 54, COL_ACCENT, &lv_font_montserrat_20, nullptr);
+  btn_minus = mk_btn(trow, LV_SYMBOL_MINUS, minus_cb, 60, 96, COL_ACCENT, &lv_font_montserrat_28, nullptr);
   lv_obj_set_style_radius(btn_minus, LV_RADIUS_CIRCLE, 0);
 
   // Red start/stop circle. The gray gear teeth are children of the button, so
@@ -175,7 +175,7 @@ void ui_create() {
   }
   for (int i = 0; i < GEAR_TEETH; i++) place_tooth(i, 0);   // static start position
 
-  btn_plus = mk_btn(trow, LV_SYMBOL_PLUS, plus_cb, 54, 54, COL_ACCENT, &lv_font_montserrat_20, nullptr);
+  btn_plus = mk_btn(trow, LV_SYMBOL_PLUS, plus_cb, 60, 96, COL_ACCENT, &lv_font_montserrat_28, nullptr);
   lv_obj_set_style_radius(btn_plus, LV_RADIUS_CIRCLE, 0);
 
   // --- bottom bar: conn | battery | gear ---
@@ -193,12 +193,12 @@ void ui_create() {
   lv_obj_set_style_text_font(lbl_batt, &lv_font_montserrat_20, 0);
   lv_label_set_text(lbl_batt, LV_SYMBOL_BATTERY_EMPTY " --");
 
-  btn_gear = mk_btn(bar, LV_SYMBOL_SETTINGS, gear_cb, 50, 40, COL_ACCENT, &lv_font_montserrat_20, nullptr);
+  btn_gear = mk_btn(bar, LV_SYMBOL_SETTINGS, gear_cb, 72, 60, COL_ACCENT, &lv_font_montserrat_28, nullptr);
 
   // --- message ---
   lbl_msg = lv_label_create(scr);
   lv_obj_set_style_text_color(lbl_msg, COL_DIM, 0);
-  lv_obj_set_style_text_font(lbl_msg, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_font(lbl_msg, &lv_font_montserrat_20, 0);
   lv_label_set_text(lbl_msg, "");
 }
 
@@ -221,7 +221,7 @@ static void modal_populate() {
     char txt[72];
     snprintf(txt, sizeof(txt), "%s  (%s)", name.c_str(), vn);
     lv_obj_t* b = lv_btn_create(modal_list);
-    lv_obj_set_width(b, LV_PCT(100));
+    lv_obj_set_size(b, LV_PCT(100), 46);
     lv_obj_set_style_bg_color(b, mac.equalsIgnoreCase(cur) ? COL_GREEN : COL_ACCENT, 0);
     lv_obj_add_event_cb(b, pick_cb, LV_EVENT_CLICKED, (void*)(intptr_t)i);
     lv_obj_t* l = lv_label_create(b);
@@ -242,7 +242,7 @@ static void modal_open() {
   lv_obj_add_flag(modal, LV_OBJ_FLAG_CLICKABLE);   // absorb taps to the screen below
 
   lv_obj_t* panel = lv_obj_create(modal);
-  lv_obj_set_size(panel, 250, 390);
+  lv_obj_set_size(panel, 250, 410);
   lv_obj_center(panel);
   lv_obj_set_style_bg_color(panel, COL_BG, 0);
   lv_obj_set_style_border_color(panel, COL_ACCENT, 0);
@@ -268,8 +268,8 @@ static void modal_open() {
   lv_obj_set_size(mrow, LV_PCT(100), LV_SIZE_CONTENT);
   lv_obj_set_flex_flow(mrow, LV_FLEX_FLOW_ROW);
   lv_obj_set_flex_align(mrow, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-  btn_mode_w = mk_btn(mrow, "By weight", mode_w_cb, 108, 38, COL_ACCENT, &lv_font_montserrat_14, nullptr);
-  btn_mode_t = mk_btn(mrow, "By time",   mode_t_cb, 108, 38, COL_ACCENT, &lv_font_montserrat_14, nullptr);
+  btn_mode_w = mk_btn(mrow, "By weight", mode_w_cb, 108, 52, COL_ACCENT, &lv_font_montserrat_14, nullptr);
+  btn_mode_t = mk_btn(mrow, "By time",   mode_t_cb, 108, 52, COL_ACCENT, &lv_font_montserrat_14, nullptr);
   refresh_mode_btns();
 
   // scale picker
@@ -290,8 +290,8 @@ static void modal_open() {
   lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
   lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
   lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-  mk_btn(row, LV_SYMBOL_REFRESH " Rescan", rescan_cb, 108, 40, COL_ACCENT, &lv_font_montserrat_14, nullptr);
-  mk_btn(row, LV_SYMBOL_CLOSE  " Close",  close_cb,  108, 40, COL_ACCENT, &lv_font_montserrat_14, nullptr);
+  mk_btn(row, LV_SYMBOL_REFRESH " Rescan", rescan_cb, 108, 52, COL_ACCENT, &lv_font_montserrat_14, nullptr);
+  mk_btn(row, LV_SYMBOL_CLOSE  " Close",  close_cb,  108, 52, COL_ACCENT, &lv_font_montserrat_14, nullptr);
 
   modal_gen = g_scale.scanGeneration();
   modal_populate();
