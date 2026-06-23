@@ -50,7 +50,10 @@ class Grinder {
   uint32_t _stableSinceMs = 0;
   float    _stableRefW    = 0;
   uint32_t _pulseStartMs  = 0;
+  uint32_t _pulseMs       = 0;   // length of the current (tapered) pulse
   int      _pulseCount    = 0;
+  float    _prePulseW     = 0;   // weight just before the current pulse
+  float    _lastGain      = 0;   // grams the last pulse actually added (after settling)
 
   void motor(bool on);
   void persist();

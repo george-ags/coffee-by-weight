@@ -36,17 +36,23 @@
 
 // --- Fine-approach dosing -------------------------------------------------
 // Coarse phase runs the motor until APPROACH_MARGIN_G *before* the target, then
-// stops and lets the weight settle. If the settled weight is still below target,
-// the motor is pulsed in short bursts (PULSE_MS) — settle, check, repeat — until
-// the target is reached. Precise without relying on a learned overshoot.
+// stops and lets the weight settle. If still below target, the motor is pulsed
+// in short bursts — settle, check, repeat — until the target is reached.
 //
 // APPROACH_MARGIN_G must be LARGER than the "coast" — the extra coffee that lands
-// after the motor stops (scale-notification latency + grinder/chute retention).
-// Measured coast was ~0.8 g, so 1.0 g lands the coarse stop ~0.2 g under target
-// and lets the fine pulses finish. Raise it if you still overshoot; lower it
-// (toward the coast) if the fine stage takes too many pulses.
+// after the motor stops (scale latency + grinder/chute retention). Measured coast
+// was ~0.8 g, so 1.0 g lands the coarse stop ~0.2 g under target.
+//
+// Fine pulses TAPER with the remaining deficit so the endgame doesn't overshoot:
+//   burst_ms = clamp(remaining_g * PULSE_MS_PER_G, PULSE_MIN_MS, PULSE_MS)
+// and the grind stops one step early when another pulse would overshoot more than
+// stopping now undershoots (judged from the measured gain of the previous pulse).
+// If you still land slightly over, lower PULSE_MS_PER_G or PULSE_MIN_MS; if it
+// takes too many pulses or lands under, raise them.
 #define APPROACH_MARGIN_G       1.0f    // coarse cut this far below target
-#define PULSE_MS                100     // motor burst length per fine pulse
+#define PULSE_MS                100     // longest fine pulse (far from target)
+#define PULSE_MIN_MS             40     // shortest fine pulse (final nudges)
+#define PULSE_MS_PER_G          250     // ms of burst per gram remaining (lower = gentler)
 #define TARGET_EPSILON_G        0.05f   // target counts as reached within this
 #define MAX_FINE_PULSES         40      // safety cap on number of pulses
 

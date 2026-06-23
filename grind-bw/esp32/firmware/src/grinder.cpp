@@ -57,6 +57,8 @@ void Grinder::start() {
   _timedOut    = false;
   _finalWeight = 0;
   _pulseCount  = 0;
+  _lastGain    = 0;
+  _prePulseW   = 0;
 
   if (_mode == GrindMode::TIME) {
     // Pure timer — no scale required, no tare.
@@ -162,25 +164,40 @@ void Grinder::update(float weight, bool scaleConnected) {
       bool stable    = (now - _stableSinceMs) >= (uint32_t)SETTLE_STABLE_HOLD_MS;
       bool capped    = (now - _settleStartMs) >= (uint32_t)SETTLE_MAX_MS;
       if (minWaited && (stable || capped)) {
+        // What did the pulse we just finished actually add?
+        if (_pulseCount > 0) _lastGain = weight - _prePulseW;
+        float remaining = _target - weight;
+
         if (weight >= _target - TARGET_EPSILON_G) {
           Serial.printf("[grind] target reached: %.2f g\n", weight);
+          finish(weight, false);
+        } else if (_lastGain > 0.01f && remaining < 0.5f * _lastGain) {
+          // Another pulse would overshoot by more than stopping here undershoots.
+          Serial.printf("[grind] stop short: %.2f g (last pulse +%.2f g)\n", weight, _lastGain);
           finish(weight, false);
         } else if (_pulseCount >= MAX_FINE_PULSES) {
           Serial.printf("[grind] pulse cap at %.2f g\n", weight);
           finish(weight, false);
         } else {
+          // Taper the burst to the remaining deficit so the endgame is gentle.
+          uint32_t pms = (uint32_t)(remaining * PULSE_MS_PER_G);
+          if (pms < (uint32_t)PULSE_MIN_MS) pms = (uint32_t)PULSE_MIN_MS;
+          if (pms > (uint32_t)PULSE_MS)     pms = (uint32_t)PULSE_MS;
+          _pulseMs      = pms;
+          _prePulseW    = weight;
           _pulseCount++;
           _pulseStartMs = now;
-          _state = GrindState::PULSING;
+          _state        = GrindState::PULSING;
           motor(true);
-          Serial.printf("[grind] pulse %d at %.2f g\n", _pulseCount, weight);
+          Serial.printf("[grind] pulse %d at %.2f g (-%.2f to go, %lu ms)\n",
+                        _pulseCount, weight, remaining, (unsigned long)_pulseMs);
         }
       }
       break;
     }
 
     case GrindState::PULSING:
-      if (millis() - _pulseStartMs >= (uint32_t)PULSE_MS) {
+      if (millis() - _pulseStartMs >= _pulseMs) {
         motor(false);
         beginSettle(weight);
       }
