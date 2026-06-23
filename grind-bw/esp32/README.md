@@ -4,22 +4,27 @@ Grind-by-weight controller for an espresso grinder, built on the
 **Waveshare ESP32-S3-Touch-AMOLED-1.64**. It connects to a Bluetooth coffee
 scale (Acaia or BooKoo), shows the live weight on the touch screen, lets you
 dial in a target dose, and runs the grinder until the scale reaches that target.
+It can also grind on a fixed timer instead, for when you'd rather not use a scale.
 
-Status: **in development** — the firmware is working end to end (display, touch,
-scale, weight-controlled grinding); the enclosure/mount is a parametric starting
-point still being fitted.
+Status: **in development** — the firmware works end to end: display, touch,
+Bluetooth scale, and both weight- and time-based grinding. A printable screen
+mount for the Mignon is included.
 
 ## What it does
 
-- Connects to a Bluetooth scale (Acaia Lunar/Pyxis/etc. or BooKoo) and streams
-  the live weight.
-- Touch UI: a big live-weight readout, a round target button you tap to grind,
-  − / + to set the dose, and a bottom bar with Bluetooth status, color-coded
-  battery %, and a settings gear.
-- Grind sequence: tare → 1 s settle → motor on → coarse cut 0.5 g before target
-  → short motor pulses that creep the dose up to the exact target.
-- Remembers the chosen scale and locks to it; the scale is changed only from the
-  on-screen settings gear.
+- Two grind modes, selectable in the settings screen:
+  - **By weight** (default): connects to a Bluetooth scale (Acaia Lunar/Pyxis/etc.
+    or BooKoo) and grinds to a target dose in grams. Sequence: tare → 1 s settle →
+    coarse cut to 0.5 g before target → short motor pulses that creep up to the
+    exact target. The top readout shows the live weight in `gram`.
+  - **By time**: grinds for a fixed number of seconds — no scale needed. The top
+    readout becomes a countdown in `seconds` from the target time to zero.
+- Touch UI: a big readout, a round start/stop button showing the active target
+  (dose or time), − / + to adjust it, and a bottom bar with Bluetooth status,
+  color-coded battery %, and a settings gear. The button is styled as a gear
+  whose teeth spin while the motor is running.
+- Remembers the chosen scale and locks to it; the scale and the grind mode are
+  changed from the on-screen settings gear.
 
 ## Hardware
 
@@ -100,20 +105,32 @@ against the reference project credited below:
 
 ## Using it
 
+Pick a grind mode in the settings gear — **By weight** (default) or **By time**.
+The choice is saved across reboots.
+
+**Weight mode**
+
 1. First boot: it adopts the first supported scale it finds, then locks to it.
-2. Set the dose with − / +. Tap the red circle to grind.
+2. Set the dose with − / +. Tap the circle to grind.
 3. It tares, waits a second, runs the motor to ~0.5 g short of target, then
    pulses up to the exact target and stops.
 4. To use a different scale, tap the gear and pick one — that choice is saved
-   and becomes the locked scale. It will not switch to another scale on its own,
-   even if a different one is nearby.
+   and becomes the locked scale. It won't switch to another on its own, even if
+   a different one is nearby.
+
+**Time mode**
+
+1. Set the time with − / + (0.1 s steps). No scale required.
+2. Tap the circle — the top counts down from the target time to zero, the motor
+   runs for that long, then stops.
 
 ## Tuning
 
 All knobs are at the top of [`firmware/src/config.h`](firmware/src/config.h):
 
-- Dose: `TARGET_DEFAULT_G`, `TARGET_MIN_G`, `TARGET_MAX_G`, `TARGET_STEP_G`.
-- Approach: `APPROACH_MARGIN_G` (coarse cut distance, default 0.5 g),
+- Dose (weight mode): `TARGET_DEFAULT_G`, `TARGET_MIN_G`, `TARGET_MAX_G`, `TARGET_STEP_G`.
+- Time (time mode): `TIME_DEFAULT_S`, `TIME_MIN_S`, `TIME_MAX_S`, `TIME_STEP_S` (0.1 s steps).
+- Approach (weight mode): `APPROACH_MARGIN_G` (coarse cut distance, default 0.5 g),
   `PULSE_MS` (pulse length — raise it if your grinder's motor is slow to spin up
   and pulses produce nothing), `TARGET_EPSILON_G`.
 - Timing/safety: `PRE_GRIND_TARE_MS`, `MAX_GRIND_SECONDS`, `MAX_FINE_PULSES`.
