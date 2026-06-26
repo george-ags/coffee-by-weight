@@ -69,7 +69,7 @@
 #define MAX_GRIND_SECONDS      40.0f
 
 // How long the DONE result (green flash + "HERE YOU GO") is shown before idle.
-#define DONE_HOLD_MS            5000
+#define DONE_HOLD_MS           10000
 
 // On START: tare the scale, then wait this long before running the motor, so
 // the tare settles and the dose is counted from a true zero.
