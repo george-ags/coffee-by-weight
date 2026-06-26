@@ -357,6 +357,14 @@ void ui_update() {
     for (int i = 0; i < GEAR_TEETH; i++) place_tooth(i, gear_angle);
   }
 
+  // "done" celebration: flash the readout + teeth green for the DONE hold,
+  // then everything restores to normal once the grind returns to idle.
+  bool flashGreen = (st == GrindState::DONE) && !g_grinder.timedOut() &&
+                    (((now / 350) % 2) == 0);
+  lv_obj_set_style_text_color(lbl_weight, flashGreen ? COL_GREEN : COL_FG, 0);
+  lv_color_t tcol = flashGreen ? COL_GREEN : COL_TEETH;
+  for (int i = 0; i < GEAR_TEETH; i++) lv_obj_set_style_bg_color(teeth[i], tcol, 0);
+
   // connectivity icon
   lv_obj_set_style_text_color(lbl_conn, conn ? COL_BLUE : COL_DIM, 0);
 
@@ -371,10 +379,14 @@ void ui_update() {
     lv_obj_set_style_text_color(lbl_batt, COL_DIM, 0);
   }
 
-  // message line
-  if (mode == GrindMode::TIME) {
+  // message line (default dim; a successful finish turns it green)
+  lv_obj_set_style_text_color(lbl_msg, COL_DIM, 0);
+  if (st == GrindState::DONE && !g_grinder.timedOut()) {
+    lv_obj_set_style_text_color(lbl_msg, COL_GREEN, 0);
+    lv_label_set_text(lbl_msg, "HERE YOU GO");
+  } else if (mode == GrindMode::TIME) {
     if (st == GrindState::GRINDING)  lv_label_set_text(lbl_msg, "grinding...");
-    else if (st == GrindState::DONE) lv_label_set_text(lbl_msg, g_grinder.timedOut() ? "stopped (max time)" : "done");
+    else if (st == GrindState::DONE) lv_label_set_text(lbl_msg, "stopped (max time)");
     else                             lv_label_set_text(lbl_msg, "ready - tap to grind");
   } else if (st == GrindState::TARING) {
     lv_label_set_text(lbl_msg, "taring...");
@@ -383,13 +395,8 @@ void ui_update() {
     lv_label_set_text(lbl_msg, m);
   } else if (st == GrindState::SETTLING || st == GrindState::PULSING) {
     lv_label_set_text(lbl_msg, "approaching target...");
-  } else if (st == GrindState::DONE) {
-    char m[48];
-    if (g_grinder.timedOut())
-      snprintf(m, sizeof(m), "timed out at %.1f g", g_grinder.finalWeight());
-    else
-      snprintf(m, sizeof(m), "done: %.1f g",
-               g_grinder.finalWeight() > 0 ? g_grinder.finalWeight() : g_scale.weight);
+  } else if (st == GrindState::DONE) {   // timed out (failure)
+    char m[48]; snprintf(m, sizeof(m), "timed out at %.1f g", g_grinder.finalWeight());
     lv_label_set_text(lbl_msg, m);
   } else {
     lv_label_set_text(lbl_msg, conn ? "ready - tap to grind" : "scanning for scale...");

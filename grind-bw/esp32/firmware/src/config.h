@@ -68,8 +68,8 @@
 // never reached, the motor is cut and the grind is marked timed-out.
 #define MAX_GRIND_SECONDS      40.0f
 
-// How long the DONE result is shown before returning to idle.
-#define DONE_HOLD_MS            3000
+// How long the DONE result (green flash + "HERE YOU GO") is shown before idle.
+#define DONE_HOLD_MS            5000
 
 // On START: tare the scale, then wait this long before running the motor, so
 // the tare settles and the dose is counted from a true zero.
