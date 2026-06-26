@@ -51,8 +51,8 @@
 // takes too many pulses or lands under, raise them.
 #define APPROACH_MARGIN_G       0.9f    // coarse cut this far below target
 #define PULSE_MS                 80     // longest fine pulse (far from target)
-#define PULSE_MIN_MS             30     // shortest fine pulse (final nudges)
-#define PULSE_MS_PER_G          250     // ms of burst per gram remaining (lower = gentler)
+#define PULSE_MIN_MS             22     // shortest fine pulse (final nudges)
+#define PULSE_MS_PER_G          180     // ms of burst per gram remaining (lower = gentler)
 #define TARGET_EPSILON_G        0.05f   // target counts as reached within this
 #define MAX_FINE_PULSES         40      // safety cap on number of pulses
 
