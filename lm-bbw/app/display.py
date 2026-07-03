@@ -443,10 +443,23 @@ class DisplayData:
         n = len(data)
         half = max(1, self.flow_smooth_factor // 2)
         for i in range(n):
-            if i < half or i >= n - half:
-                k = min(i, n - 1 - i, half)
-                lo, hi = i - k, i + k + 1
-                out[i] = sum(data[lo:hi]) / (hi - lo)
+            near_start = i < half
+            near_end = i >= n - half
+            if not (near_start or near_end):
+                continue
+            # While the pour is LIVE, leave the newest (right-edge) points as the
+            # centered rolling mean produced them - a ~W/2 trailing average that
+            # stays smooth. Converging the right edge down to the raw sample (as
+            # below) is what makes the leading edge jump up and down before it
+            # settles, because the newest single-sample flow reading is noisy.
+            # We still converge the right edge once the pour has STOPPED (so the
+            # post-shot tail decays visibly to zero), and always converge the
+            # left (oldest) edge.
+            if near_end and not near_start and self.paddle_on:
+                continue
+            k = min(i, n - 1 - i, half)
+            lo, hi = i - k, i + k + 1
+            out[i] = sum(data[lo:hi]) / (hi - lo)
         return out
 
 class DisplaySize(Enum):
