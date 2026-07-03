@@ -102,6 +102,14 @@ class ControlManager:
         # Tare callback, wired up later via add_tare_handler().
         self._tare_callback: Optional[Callable] = None
 
+        # Reads the scale's current raw weight; wired via add_weight_reader().
+        self._weight_reader: Optional[Callable] = None
+        # Software tare baseline: the platter load captured at the instant a
+        # shot starts. Subtracted from every shot-critical weight reading so the
+        # tracked shot weight starts at 0 regardless of whether/when the
+        # hardware tare lands. See net_weight() / in_shot_window().
+        self.shot_tare_offset: float = 0.0
+
         # --- AUTO-SLEEP CONFIG ---
         self.idle_timeout = int(os.environ.get('IDLE_TIMEOUT', 300))
         self.sleep_pause = int(os.environ.get('SLEEP_PAUSE', 360))
@@ -405,6 +413,32 @@ class ControlManager:
         if self._tare_callback is not None:
             self._tare_callback()
 
+    def add_weight_reader(self, callback: Callable):
+        """Wire a zero-arg callable that returns the scale's current raw weight."""
+        self._weight_reader = callback
+
+    def _read_scale_weight(self) -> float:
+        """Current raw scale weight (last notification), or 0.0 if unavailable."""
+        if self._weight_reader is not None:
+            try:
+                return float(self._weight_reader())
+            except Exception:
+                return 0.0
+        return 0.0
+
+    def net_weight(self, raw_weight: float) -> float:
+        """Raw scale weight minus this shot's software tare baseline."""
+        return raw_weight - self.shot_tare_offset
+
+    def in_shot_window(self) -> bool:
+        """
+        True while a shot is pouring or still inside the drip-out capture
+        window. Used to decide when the software tare offset applies to the
+        displayed weight (outside this window the raw reading is shown, so an
+        idle scale and its own display stay in agreement).
+        """
+        return self.relay_on() or (self.relay_off_time + DRIP_OUT_CAPTURE_SECONDS > timer())
+
     def should_scale_connect(self) -> bool:
         return self.scale_connect_button.value
 
@@ -613,12 +647,21 @@ class ControlManager:
             self.relay.on()
 
         if self.scale_is_connected_flag:
-            try:
-                logging.info("Scale Connected -> Auto-Taring...")
-                self._do_tare()
-            except Exception as e:
-                logging.error(f"Auto-Tare failed (Shot continuing): {e}")
+            # Software tare: snapshot the platter load (cup + any residue) at
+            # the instant the shot starts and use it as this shot's zero
+            # baseline (see net_weight()). Applied instantly and immune to BLE
+            # / tare latency.
+            #
+            # We deliberately do NOT send a hardware tare here. The BooKoo tare
+            # can land seconds late - or be silently ignored while the scale is
+            # in automatic mode (the vendor protocol doc marks the tare command
+            # "Not valid during automatic mode operation") - and a late/ignored
+            # tare is exactly what caused both the instant "short shot" cut and
+            # the constant ~8 g overshoot on the restart.
+            self.shot_tare_offset = self._read_scale_weight()
+            logging.info("Software tare baseline captured: %.2f g" % self.shot_tare_offset)
         else:
+            self.shot_tare_offset = 0.0
             logging.info("Scale Not Connected -> Skipping Tare")
 
 

@@ -106,7 +106,7 @@ def update_overshoot(scale, mgr: ControlManager):
     # if the drip-out window is configured shorter.
     time.sleep(max(3.0, control.DRIP_OUT_CAPTURE_SECONDS + 0.3))
     target = mgr.current_memory().target
-    final_weight = scale.weight
+    final_weight = mgr.net_weight(scale.weight)
     logging.debug("over scale weight is %.2f, target was %.2f" % (final_weight, target))
 
     # Reject shots that landed too far off target (in either direction): don't
@@ -130,7 +130,7 @@ def check_target_disable_relay(scale: Scale, mgr: ControlManager):
     if mgr.shot_time_elapsed() < 1.5:
         return
 
-    if mgr.relay_on() and scale.weight > mgr.current_memory().target_minus_overshoot():
+    if mgr.relay_on() and mgr.net_weight(scale.weight) > mgr.current_memory().target_minus_overshoot():
         if mgr.shot_time_elapsed() >= SHOT_TIMEOUT_SECONDS:
             logging.info("Shot reached 60s timeout - disabling relay, skipping memory update")
             mgr.disable_relay()
@@ -172,6 +172,9 @@ def main():
             mgr.discovered_vendor = last_vendor
 
     mgr.add_tare_handler(lambda: scale.tare())
+    # Lets the manager snapshot the current raw weight when a shot starts, for
+    # the software tare baseline (see ControlManager._start_shot / net_weight).
+    mgr.add_weight_reader(lambda: scale.weight)
 
     # Start the web server now that mgr + scale exist, so the setup page can
     # trigger scans and pin a scale.
@@ -248,7 +251,10 @@ TARE_SETTLE_SECONDS = 1.5
 
 def update_display(scale: Scale, mgr: ControlManager, display: Display, last_time: float, last_weight: float, timeout_stop: bool = False, force_ready: bool = False) -> (float, float):
     now = timer()
-    weight = scale.weight
+    # During a shot (and its drip-out window) show the software-tared weight so
+    # the reading starts at 0 and reflects the poured amount; when idle show the
+    # raw reading so the display agrees with the scale's own readout.
+    weight = mgr.net_weight(scale.weight) if mgr.in_shot_window() else scale.weight
     sample_rate = 0.0
     if last_time is not None and last_weight is not None:
         sample_rate = now - last_time

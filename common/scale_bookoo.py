@@ -38,7 +38,10 @@ except ImportError:
 # --- BLE UUIDs ---
 # The spec gives 16-bit UUIDs that expand to the standard Bluetooth base UUID:
 #   0000xxxx-0000-1000-8000-00805F9B34FB
-BOOKOO_SERVICE_UUID = "0000ffe0-0000-1000-8000-00805f9b34fb"      # 0x0FFE service group
+# NOTE: the service is discovered dynamically from the characteristics in
+# _setup_services(), so this constant is informational only and is not used for
+# matching. The vendor doc lists the service as 0x0FFE.
+BOOKOO_SERVICE_UUID = "00000ffe-0000-1000-8000-00805f9b34fb"      # 0x0FFE service group (unused; see note)
 BOOKOO_CMD_UUID     = "0000ff12-0000-1000-8000-00805f9b34fb"      # Command characteristic
 BOOKOO_WEIGHT_UUID  = "0000ff11-0000-1000-8000-00805f9b34fb"      # Weight-data characteristic
 
@@ -133,7 +136,7 @@ def decode_weight_packet(packet) -> dict:
       BYTE15-16 [14..15]  standby time (min, BE16)
       BYTE17 [16]  buzzer gear
       BYTE18 [17]  flow-rate smoothing switch
-      BYTE19 [18]  reserved (00)
+      BYTE19 [18]  stop-condition flag for automatic-mode
       BYTE20 [19]  DATASUM (XOR checksum)
 
     Returns dict: {valid, weight, units, battery, flow_rate, timer_ms, checksum_ok}.
