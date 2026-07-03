@@ -765,7 +765,7 @@ def try_connect_scale(scale: Scale, mgr: ControlManager) -> bool:
             return True
 
         if mgr.discovered_mac:
-            logging.info("Main Thread connecting to found MAC: %s [%s]" % (mgr.discovered_mac, mgr.discovered_vendor or DEFAULT_VENDOR))
+            logging.debug("Main Thread connecting to found MAC: %s [%s]" % (mgr.discovered_mac, mgr.discovered_vendor or DEFAULT_VENDOR))
 
             # Reset idle timer immediately on a connect attempt.
             mgr._activity_detected()
@@ -773,7 +773,7 @@ def try_connect_scale(scale: Scale, mgr: ControlManager) -> bool:
             # Point the wrapper at the right vendor backend + MAC.
             scale.prepare(mgr.discovered_mac, mgr.discovered_vendor or DEFAULT_VENDOR)
 
-            logging.info("Clearing old shot data (Preparing to Connect)")
+            logging.debug("Clearing old shot data (Preparing to Connect)")
             mgr.flow_rate_data.clear()
 
             # Only reset the shot timer if we are NOT mid-shot.

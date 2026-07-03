@@ -242,7 +242,7 @@ class BookooScale(object):
             target = None
             for attempt in range(3):
                 try:
-                    logging.info(f"Scanning to acquire BooKoo {self.mac} (Attempt {attempt + 1})...")
+                    logging.debug(f"Scanning to acquire BooKoo {self.mac} (Attempt {attempt + 1})...")
                     with adapter_scan_lock:
                         self.adapter.scan_for(2000)
                         peripherals = self.adapter.scan_get_results()
