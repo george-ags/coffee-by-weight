@@ -208,6 +208,7 @@ def main():
                 logging.info("Shot Started in MANUAL Mode (Scale not ready)")
 
         if is_connected:
+            mgr.update_tare_verification()
             check_target_disable_relay(scale, mgr)
         
         elif relay_is_on:
@@ -277,7 +278,7 @@ def update_display(scale: Scale, mgr: ControlManager, display: Display, last_tim
     data = DisplayData(weight, sample_rate, mgr.current_memory(), mgr.flow_rate_data,
                        scale.battery, mgr.relay_on(), mgr.shot_time_elapsed(),
                        mgr.image_needs_save, smoothing, timeout_stop=timeout_stop, force_ready=force_ready,
-                       vendor=getattr(scale, 'vendor', None))
+                       vendor=getattr(scale, 'vendor', None), tare_failed=mgr.tare_failed)
     display.display_on()
     display.put_data(data)
     mgr.image_needs_save = False

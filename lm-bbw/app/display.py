@@ -405,7 +405,7 @@ class DisplayData:
     def __init__(self, weight: float, sample_rate: float, memory, flow_data: list, battery: int,
                  paddle_on: bool, shot_time_elapsed: float, save_image: bool = False,
                  flow_smooth_factor: int = 10, timeout_stop: bool = False, force_ready: bool = False,
-                 vendor: str = None):
+                 vendor: str = None, tare_failed: bool = False):
         self.weight = weight
         self.sample_rate = sample_rate
         self.memory = memory
@@ -421,6 +421,8 @@ class DisplayData:
         self.force_ready = force_ready
         # Connected scale vendor key ('acaia' / 'bookoo'); drives the badge.
         self.vendor = vendor
+        # True when the hardware tare could not be confirmed for this shot.
+        self.tare_failed = tare_failed
 
     def flow_rate_moving_avg(self) -> list:
         if not self.flow_data:
@@ -722,6 +724,8 @@ class Display:
                     data.force_ready,
                     # Vendor badge identity (redraw if the connected brand changes).
                     getattr(data, 'vendor', None),
+                    # Tare-failure indicator visibility.
+                    getattr(data, 'tare_failed', False),
                 )
 
                 if animating or just_woke or data.save_image or render_sig != self.last_render_sig:
@@ -981,6 +985,16 @@ def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayO
         if warn_y < graph_y:
             warn_y = graph_y  # keep it below the header if the icon is tall
         img.paste(warning_img, (warn_x, warn_y), warning_img)
+
+    # --- 7b. TARE-FAILURE INDICATOR ---
+    # The hardware tare could not be confirmed for this shot (e.g. scale in
+    # automatic mode, or tare dropped). The pour still proceeds on the software
+    # baseline, so this is a warning, not a stop. Static (no flash) red label
+    # centred just under the header; hidden on the Ready/logo screen.
+    if getattr(data, 'tare_failed', False) and not data.force_ready:
+        tf_msg = "TARE?"
+        tf_w = draw.textlength(tf_msg, label_font)
+        draw.text(((width - tf_w) / 2, header_h + 4), tf_msg, "#ff3030", label_font)
 
     # --- 8. VENDOR BADGE (top-left of main area, always shown) ---
     # Drawn last so it sits on top of the graph during brewing; on the ready
