@@ -323,7 +323,11 @@ void ui_update() {
     char t[12]; snprintf(t, sizeof(t), "%.1f", g_grinder.targetTime());  // middle = target time
     lv_label_set_text(lbl_start, t);
   } else {
-    char w[16]; snprintf(w, sizeof(w), "%.1f", g_scale.weight);
+    // During the DONE hold (the green flash) freeze the readout on the final
+    // dose instead of tracking the live scale, so lifting the cup/portafilter
+    // doesn't move the number. Resumes live weight once DONE -> IDLE.
+    float shown = (st == GrindState::DONE) ? g_grinder.finalWeight() : g_scale.weight;
+    char w[16]; snprintf(w, sizeof(w), "%.1f", shown);
     lv_label_set_text(lbl_weight, w);
     lv_label_set_text(lbl_weight_u, "gram");
     char t[12]; snprintf(t, sizeof(t), "%.1f", g_grinder.target());      // middle = target dose
