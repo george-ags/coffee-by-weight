@@ -6,7 +6,7 @@
 # The rest of the application talks to a single `Scale` object using a small,
 # vendor-agnostic interface (mac, connected, weight, battery, units, connect(),
 # disconnect(), tare()). This module hides which concrete backend
-# (Acaia or BooKoo) is actually in use, and provides:
+# (Acaia, BooKoo or Timemore) is actually in use, and provides:
 #
 #   - find_all_scales(timeout)  -> one BLE scan, classified by vendor
 #   - make_scale(vendor, mac)   -> construct the right backend
@@ -26,12 +26,14 @@ except ImportError:
 
 from common.scale_acaia import AcaiaScale, ACAIA_NAME_PREFIXES
 from common.scale_bookoo import BookooScale, BOOKOO_NAME_PREFIXES
+from common.scale_timemore import TimemoreScale, TIMEMORE_NAME_PREFIXES
 from common.ble import adapter_scan_lock
 
 # vendor key -> (display label, name-prefix list, constructor)
 VENDORS = {
-    'acaia':  ('Acaia',  ACAIA_NAME_PREFIXES,  AcaiaScale),
-    'bookoo': ('BooKoo', BOOKOO_NAME_PREFIXES, BookooScale),
+    'acaia':    ('Acaia',    ACAIA_NAME_PREFIXES,    AcaiaScale),
+    'bookoo':   ('BooKoo',   BOOKOO_NAME_PREFIXES,   BookooScale),
+    'timemore': ('Timemore', TIMEMORE_NAME_PREFIXES, TimemoreScale),
 }
 
 DEFAULT_VENDOR = 'acaia'

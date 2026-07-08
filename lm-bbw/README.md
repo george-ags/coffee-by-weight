@@ -2,7 +2,7 @@
 
 LM-BBW adds **brew-by-weight** to the La Marzocco Linea Micra using a Bluetooth coffee scale. A small Raspberry Pi controller reads the scale over Bluetooth, displays the live shot, and acts as a proxy for the paddle switch — automatically stopping the shot when the cup reaches your target weight.
 
-It works with **Acaia** scales (Lunar, Pyxis, Umbra) and **BooKoo** scales (Ultra, Mini), and can be adapted to almost any espresso machine + Bluetooth scale combination. Support for additional vendors can be added with a small driver module (see [Development](#development)).
+It works with **Acaia** scales (Lunar, Pyxis, Umbra), **BooKoo** scales (Ultra, Mini), and **Timemore** scales (Black Mirror), and can be adapted to almost any espresso machine + Bluetooth scale combination. Support for additional vendors can be added with a small driver module (see [Development](#development)).
 
 > **Note:** This is a hobby project — a proof of concept being beaten into shape — so there is **no support**. Contributions are welcome, but it is built around my own needs; for customization, forking and making it your own is the best path.
 
@@ -38,7 +38,7 @@ This project was inspired by and originally based on Marcus Sorensen's [Apollo](
 - **Three memory banks (A / B / C)** — each with its own target, learned overshoot, custom on-screen name, and accent color.
 - **Live display** — weight, target, timer, battery, and a smoothed real-time flow-rate graph on a 2" SPI screen.
 - **Shot history** — an image of every completed shot is saved and browsable through a built-in web gallery.
-- **Multi-vendor scales** — works with Acaia (Lunar / Pyxis / Umbra) and BooKoo (Ultra / Mini); each brand has its own driver behind a common interface.
+- **Multi-vendor scales** — works with Acaia (Lunar / Pyxis / Umbra), BooKoo (Ultra / Mini), and Timemore (Black Mirror); each brand has its own driver behind a common interface.
 - **Scan & select** — a Bluetooth setup page scans for nearby scales and lets you pin a specific one; once pinned, only that scale is used and others are ignored. Unrecognized devices can be picked by address and assigned a brand.
 - **Web configuration** — change settings from a browser; no SSH required.
 - **Auto-connect / auto-sleep** — reconnects to the last known (or pinned) scale and idles gracefully (especially handy with the display-less Umbra).
@@ -332,7 +332,7 @@ Defines how the screen is drawn, updates the physical display, and saves images 
 
 Sets up the Display and ControlManager, then orchestrates data collection, the target-weight cutoff, overshoot learning, and state updates.
 
-### Scale drivers (`common/scales.py`, `common/scale_acaia.py`, `common/scale_bookoo.py`)
+### Scale drivers (`common/scales.py`, `common/scale_acaia.py`, `common/scale_bookoo.py`, `common/scale_timemore.py`)
 
 These live in the repo's shared `common/` package (used by every app in coffee-by-weight, not just LM-BBW), so a driver fix lands everywhere with one commit. Each vendor has its own driver exposing a common interface (`connect`, `disconnect`, `tare`, and `mac` / `connected` / `weight` / `battery` / `units`). `scales.py` is the vendor-neutral layer: a combined scanner that tags each device with its brand, a factory, and a `Scale` wrapper that delegates to the right backend and can switch vendors in place. To add a new vendor, write a driver with the same interface and register its advertised-name prefix and constructor in `scales.py`. All BLE scans are serialized through a single lock in `common/ble.py` so the adapter is never scanned by two code paths at once.
 

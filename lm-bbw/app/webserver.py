@@ -7,7 +7,7 @@ import io
 import sys
 import threading
 
-from common.scales import vendor_label
+from common.scales import vendor_label, VENDORS
 
 # Shared image assets (e.g. the scale-setup icon) live in the common package,
 # outside the web root, so they are served through a small explicit route.
@@ -301,8 +301,9 @@ class GalleryHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
             r.append('<label style="color:#88c0d0; font-weight:bold;">Treat selected device as: </label>')
             r.append('<select name="fallback_vendor" style="padding:8px; background:#444; color:#fff; '
                      'border:1px solid #555; border-radius:4px;">')
-            r.append('<option value="bookoo">BooKoo</option>')
-            r.append('<option value="acaia">Acaia</option>')
+            # Built from the vendor registry so new drivers appear automatically.
+            for vkey, (vlabel, _prefixes, _ctor) in VENDORS.items():
+                r.append(f'<option value="{html.escape(vkey)}">{html.escape(vlabel)}</option>')
             r.append('</select>')
             r.append('</div>')
 
