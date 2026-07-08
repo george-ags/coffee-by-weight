@@ -13,8 +13,8 @@ mount for the Mignon is included.
 ## What it does
 
 - Two grind modes, selectable in the settings screen:
-  - **By weight** (default): connects to a Bluetooth scale (Acaia Lunar/Pyxis/etc.
-    or BooKoo) and grinds to a target dose in grams. Sequence: tare → 1 s settle →
+  - **By weight** (default): connects to a Bluetooth scale (Acaia Lunar/Pyxis/etc.,
+    BooKoo, or Timemore Black Mirror) and grinds to a target dose in grams. Sequence: tare → 1 s settle →
     coarse cut to 0.5 g before target → short motor pulses that creep up to the
     exact target. The top readout shows the live weight in `gram`.
   - **By time**: grinds for a fixed number of seconds — no scale needed. The top
@@ -32,7 +32,7 @@ mount for the Mignon is included.
   AMOLED with FocalTech FT3168 capacitive touch.
   <https://www.waveshare.com/wiki/ESP32-S3-Touch-AMOLED-1.64>
 - **Scale:** any supported Bluetooth scale — Acaia (Lunar, Pyxis, Lunar 2021,
-  Pearl…) or BooKoo.
+  Pearl…), BooKoo, or Timemore (Black Mirror family, model TES017).
 - **Grinder:** a Eureka Mignon. The controller plugs into the grinder's
   original screen connector and drives the motor from a single active-high GPIO
   (see Wiring).

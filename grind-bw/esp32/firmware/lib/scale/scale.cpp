@@ -12,6 +12,15 @@
 //          contains the characteristic. Framing is 0xEF 0xDD <cmd> <len> ...
 //          with two trailing checksum bytes. Requires an ID + notification
 //          handshake and a ~2 s heartbeat or the weight stream stops.
+//
+//  Timemore  Black Mirror family (model TES017). Service 0xFFF0; notify 0xFFF1;
+//          write 0xFFF2 (write-no-response). Like BooKoo it streams once you
+//          subscribe — no handshake, no heartbeat. Frames are
+//          0xA5 0x5A <opcode> <cmd> <len:2 BE> <payload> <crc:2>, len counting
+//          payload only. Weight/flow/timer arrive as cmd 0x01 every 100 ms;
+//          battery as cmd 0x05. Commands (tare = opcode 0x03 cmd 0x0D) carry a
+//          CRC-16/MODBUS the scale checks, so unlike the others we must compute
+//          it (see crc16_modbus). See doc/BT_Scale/Timemore/protocols.md.
 
 #include "scale.h"
 #include <NimBLEDevice.h>
@@ -31,17 +40,25 @@ static const char* BOOKOO_NOTIFY = "0000ff11-0000-1000-8000-00805f9b34fb";
 static const char* BOOKOO_WRITE  = "0000ff12-0000-1000-8000-00805f9b34fb";
 static const char* ACAIA_OLD     = "00002a80-0000-1000-8000-00805f9b34fb";
 static const char* ACAIA_PYXIS   = "49535343-8841-43f4-a8d4-ecbe34729bb3";
+static const char* TIMEMORE_SVC    = "0000fff0-0000-1000-8000-00805f9b34fb";
+static const char* TIMEMORE_NOTIFY = "0000fff1-0000-1000-8000-00805f9b34fb";
+static const char* TIMEMORE_WRITE  = "0000fff2-0000-1000-8000-00805f9b34fb";
 
 // ---- name classification ---------------------------------------------------
 static const char* ACAIA_PREFIXES[]  = {"ACAIA", "PYXIS", "UMBRA", "LUNAR", "PROCH"};
 static const char* BOOKOO_PREFIXES[] = {"BOOKOO"};
+// The Timemore advertised name is user-settable; these cover the brand and the
+// Black Mirror model/type strings (TES017 = "DOT"). If your scale advertises
+// under a different name, add its prefix here.
+static const char* TIMEMORE_PREFIXES[] = {"TIMEMORE", "TES017", "BLACK MIRROR", "BLACKMIRROR"};
 
 static Vendor classify(const std::string& nameIn) {
   if (nameIn.empty()) return Vendor::NONE;
   std::string n = nameIn;
   for (auto& c : n) c = toupper((unsigned char)c);
-  for (auto p : ACAIA_PREFIXES)  if (n.find(p) != std::string::npos) return Vendor::ACAIA;
-  for (auto p : BOOKOO_PREFIXES) if (n.find(p) != std::string::npos) return Vendor::BOOKOO;
+  for (auto p : ACAIA_PREFIXES)    if (n.find(p) != std::string::npos) return Vendor::ACAIA;
+  for (auto p : BOOKOO_PREFIXES)   if (n.find(p) != std::string::npos) return Vendor::BOOKOO;
+  for (auto p : TIMEMORE_PREFIXES) if (n.find(p) != std::string::npos) return Vendor::TIMEMORE;
   return Vendor::NONE;
 }
 
@@ -108,6 +125,51 @@ static float acaiaDecodeWeight(const uint8_t* p, size_t n) {
 }
 
 // ===========================================================================
+// Timemore Black Mirror framing (see doc/BT_Scale/Timemore/protocols.md)
+// ===========================================================================
+// Weight scaling is NOT stated in the protocol doc. This assumes 0.01 g per
+// count (matching BooKoo, and consistent with weight being a 4-byte Int32 while
+// flow is only 2 bytes). VERIFY against the scale's own display: if the readout
+// is 10x/100x off, change this divisor (e.g. 10.0f for 0.1 g/count).
+static const float TIMEMORE_WEIGHT_DIV = 100.0f;
+
+// CRC-16/MODBUS: poly 0x8005 (reflected 0xA001), init 0xFFFF. The doc names it
+// "CRC-16/IBM" with init 0xFFFF, which is the Modbus parameter set — the usual
+// choice for a UART-style BLE pass-through. Verified against the canonical
+// check value crc("123456789") == 0x4B37.
+static uint16_t crc16_modbus(const uint8_t* data, size_t len) {
+  uint16_t crc = 0xFFFF;
+  for (size_t i = 0; i < len; i++) {
+    crc ^= (uint16_t)data[i];
+    for (int b = 0; b < 8; b++)
+      crc = (crc & 1) ? (crc >> 1) ^ 0xA001 : (crc >> 1);
+  }
+  return crc;
+}
+
+// Build a Timemore frame: A5 5A | opcode | cmd | len(2 BE) | payload | crc(2).
+// The doc declares multi-byte fields big-endian, so the CRC is appended MSB
+// first. If the scale rejects commands (tare has no visible effect), the most
+// likely fix is swapping these two CRC bytes — Modbus's own wire order is LSB
+// first, and docs sometimes disagree with the transport on this one field.
+static std::vector<uint8_t> timemoreFrame(uint8_t opcode, uint8_t cmd,
+                                          const uint8_t* payload, size_t n) {
+  std::vector<uint8_t> f;
+  f.reserve(n + 8);
+  f.push_back(0xA5);
+  f.push_back(0x5A);
+  f.push_back(opcode);
+  f.push_back(cmd);
+  f.push_back((uint8_t)((n >> 8) & 0xFF));
+  f.push_back((uint8_t)(n & 0xFF));
+  for (size_t i = 0; i < n; i++) f.push_back(payload[i] & 0xFF);
+  uint16_t crc = crc16_modbus(f.data(), f.size());
+  f.push_back((uint8_t)((crc >> 8) & 0xFF));
+  f.push_back((uint8_t)(crc & 0xFF));
+  return f;
+}
+
+// ===========================================================================
 // Discovery store — every supported scale seen in the last scan.
 // Written from the NimBLE host task (scan callbacks), read from the UI task,
 // so the public list is guarded by a spinlock. The parallel address array is
@@ -171,7 +233,8 @@ static ClientCB s_clientCB;
 // ===========================================================================
 const char* CoffeeScale::vendorName() const {
   switch (vendor) { case Vendor::ACAIA: return "Acaia";
-                    case Vendor::BOOKOO: return "BooKoo"; default: return "—"; }
+                    case Vendor::BOOKOO: return "BooKoo";
+                    case Vendor::TIMEMORE: return "Timemore"; default: return "—"; }
 }
 
 static void bleTaskEntry(void* arg) { static_cast<CoffeeScale*>(arg)->_bleTask(); }
@@ -260,7 +323,12 @@ bool CoffeeScale::scanAndConnect() {
   }
   Serial.println("[scale] connected link, discovering services…");
 
-  bool ok = (vendor == Vendor::BOOKOO) ? setupBookoo() : setupAcaia();
+  bool ok;
+  switch (vendor) {
+    case Vendor::BOOKOO:   ok = setupBookoo();   break;
+    case Vendor::TIMEMORE: ok = setupTimemore(); break;
+    default:               ok = setupAcaia();    break;
+  }
   if (!ok) { dropConnection(); return false; }
 
   connected = true;
@@ -302,6 +370,25 @@ bool CoffeeScale::setupBookoo() {
   _notifyChar = notify; _writeChar = write;
   if (!notify->subscribe(true, notifyTrampoline)) { Serial.println("[scale] BooKoo subscribe failed"); return false; }
   Serial.println("[scale] BooKoo subscribed");
+  return true;
+}
+
+bool CoffeeScale::setupTimemore() {
+  auto* client = static_cast<NimBLEClient*>(_client);
+  NimBLERemoteService* svc = client->getService(TIMEMORE_SVC);
+  if (!svc) { Serial.println("[scale] Timemore service FFF0 not found"); return false; }
+  auto* notify = svc->getCharacteristic(TIMEMORE_NOTIFY);
+  auto* write  = svc->getCharacteristic(TIMEMORE_WRITE);
+  if (!notify || !write) { Serial.println("[scale] Timemore chars FFF1/FFF2 not found"); return false; }
+  _notifyChar = notify; _writeChar = write;
+  // Subscribing enables the 0x01 weight stream (every 100 ms) — no handshake or
+  // heartbeat, same as BooKoo.
+  if (!notify->subscribe(true, notifyTrampoline)) { Serial.println("[scale] Timemore subscribe failed"); return false; }
+  Serial.println("[scale] Timemore subscribed");
+  // Best-effort: request the current battery level (0x05 is read/notify and may
+  // not push until it changes). Harmless if the scale ignores it.
+  auto rb = timemoreFrame(0x02, 0x05, nullptr, 0);
+  writeRaw(rb.data(), rb.size());
   return true;
 }
 
@@ -393,6 +480,9 @@ void CoffeeScale::tare() {
   if (!connected) return;
   if (vendor == Vendor::BOOKOO) {
     writeRaw(BK_TARE, sizeof(BK_TARE));
+  } else if (vendor == Vendor::TIMEMORE) {
+    auto t = timemoreFrame(0x03, 0x0D, nullptr, 0);   // opcode Write, cmd Tare
+    writeRaw(t.data(), t.size());
   } else if (vendor == Vendor::ACAIA) {
     auto t = acaiaTare();
     writeRaw(t.data(), t.size());
@@ -401,8 +491,11 @@ void CoffeeScale::tare() {
 
 // ---- notification dispatch -------------------------------------------------
 void CoffeeScale::_onNotify(const uint8_t* data, size_t len) {
-  if (vendor == Vendor::BOOKOO) bookooDecode(data, len);
-  else                          acaiaFeed(data, len);
+  switch (vendor) {
+    case Vendor::BOOKOO:   bookooDecode(data, len);   break;
+    case Vendor::TIMEMORE: timemoreDecode(data, len); break;
+    default:               acaiaFeed(data, len);      break;
+  }
 }
 
 void CoffeeScale::bookooDecode(const uint8_t* p, size_t len) {
@@ -414,6 +507,32 @@ void CoffeeScale::bookooDecode(const uint8_t* p, size_t len) {
   weight = w;
   int b = p[13];                                      // battery %
   battery = b < 0 ? 0 : (b > 100 ? 100 : b);
+}
+
+void CoffeeScale::timemoreDecode(const uint8_t* p, size_t len) {
+  // Frames: A5 5A | opcode | cmd | len(2 BE) | payload | crc(2). A notification
+  // normally carries one complete frame; walk the buffer in case two are
+  // concatenated, and resync on a bad header. CRC is not checked on RX — the
+  // header + length gate is enough for a display value (the scale computes its
+  // own CRC; we only need ours right on the command path).
+  size_t i = 0;
+  while (i + 8 <= len) {                              // min frame = 6 hdr + 0 payload + 2 crc
+    if (p[i] != 0xA5 || p[i + 1] != 0x5A) { i++; continue; }
+    uint8_t  cmd  = p[i + 3];
+    uint16_t plen = ((uint16_t)p[i + 4] << 8) | p[i + 5];
+    size_t   end  = i + 6 + plen + 2;                 // header+len .. payload .. crc
+    if (end > len) break;                             // incomplete frame
+    const uint8_t* d = &p[i + 6];
+    if (cmd == 0x01 && plen >= 4) {                   // weight / flow / timer
+      int32_t raw = (int32_t)(((uint32_t)d[0] << 24) | ((uint32_t)d[1] << 16) |
+                              ((uint32_t)d[2] << 8)  |  (uint32_t)d[3]);
+      weight = raw / TIMEMORE_WEIGHT_DIV;
+    } else if (cmd == 0x05 && plen >= 2) {            // battery: [bars][percent]
+      int bat = d[1];
+      battery = bat < 0 ? 0 : (bat > 100 ? 100 : bat);
+    }
+    i = end;
+  }
 }
 
 void CoffeeScale::acaiaFeed(const uint8_t* data, size_t len) {

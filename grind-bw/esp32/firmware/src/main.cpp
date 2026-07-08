@@ -20,12 +20,15 @@
 static Preferences s_scalePrefs;
 
 static Vendor vendorFromStr(const String& s) {
-  if (s.equalsIgnoreCase("bookoo")) return Vendor::BOOKOO;
-  if (s.equalsIgnoreCase("acaia"))  return Vendor::ACAIA;
+  if (s.equalsIgnoreCase("bookoo"))   return Vendor::BOOKOO;
+  if (s.equalsIgnoreCase("timemore")) return Vendor::TIMEMORE;
+  if (s.equalsIgnoreCase("acaia"))    return Vendor::ACAIA;
   return Vendor::NONE;
 }
 static const char* vendorToStr(Vendor v) {
-  return v == Vendor::BOOKOO ? "bookoo" : (v == Vendor::ACAIA ? "acaia" : "");
+  return v == Vendor::BOOKOO   ? "bookoo"
+       : v == Vendor::TIMEMORE ? "timemore"
+       : v == Vendor::ACAIA    ? "acaia" : "";
 }
 
 void setup() {

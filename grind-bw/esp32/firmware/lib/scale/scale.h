@@ -1,9 +1,9 @@
 // scale.h — vendor-neutral Bluetooth scale client for ESP32 (NimBLE).
 //
 // Mirrors the role of common/scales.py from the Raspberry Pi project: one
-// object the rest of the firmware talks to, hiding whether an Acaia or BooKoo
-// is connected. Connection management runs on its own FreeRTOS task so the
-// LVGL UI loop never blocks on a BLE scan.
+// object the rest of the firmware talks to, hiding whether an Acaia, BooKoo, or
+// Timemore is connected. Connection management runs on its own FreeRTOS task so
+// the LVGL UI loop never blocks on a BLE scan.
 //
 // Standalone library: it has NO dependency on the application's config.h. The
 // few app-tunable values (BLE central name, scan duration) have built-in
@@ -17,7 +17,7 @@
 
 #include <Arduino.h>
 
-enum class Vendor : uint8_t { NONE, ACAIA, BOOKOO };
+enum class Vendor : uint8_t { NONE, ACAIA, BOOKOO, TIMEMORE };
 
 class CoffeeScale {
  public:
@@ -80,6 +80,7 @@ class CoffeeScale {
   bool scanAndConnect();
   bool setupAcaia();
   bool setupBookoo();
+  bool setupTimemore();
   void writeRaw(const uint8_t* data, size_t len);
   void serviceLink();      // heartbeat etc, called periodically while connected
   void dropConnection();
@@ -87,6 +88,7 @@ class CoffeeScale {
   // protocol decoders
   void acaiaFeed(const uint8_t* data, size_t len);
   void bookooDecode(const uint8_t* data, size_t len);
+  void timemoreDecode(const uint8_t* data, size_t len);
 };
 
 extern CoffeeScale g_scale;
