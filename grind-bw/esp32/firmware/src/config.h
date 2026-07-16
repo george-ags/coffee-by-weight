@@ -56,6 +56,21 @@
 #define TARGET_EPSILON_G        0.05f   // target counts as reached within this
 #define MAX_FINE_PULSES         40      // safety cap on number of pulses
 
+// --- Learn (adaptive-cutoff) dosing ---------------------------------------
+// Alternative to the pulse approach, selectable in the settings screen. Instead
+// of creeping up with pulses, the grinder runs once and cuts the motor when the
+// scale reads LEARN_STOP_OFFSET_G *below* target, lets the dose settle, then
+// adapts: if the settled weight is off target by more than LEARN_DEADBAND_G, it
+// shifts the cut point by LEARN_RATE x the error for next time. The offset
+// converges on the "coast" (coffee that lands after the motor stops) and is
+// remembered across reboots. Because the coast is roughly dose-independent, a
+// single learned offset is shared across targets.
+#define LEARN_STOP_OFFSET_G     0.5f    // initial cut this far below target
+#define LEARN_RATE              0.5f    // next-time correction = this x (final - target)
+#define LEARN_DEADBAND_G        0.1f    // only correct when |final - target| exceeds this
+#define LEARN_OFFSET_MIN_G      0.0f    // clamp the learned offset to a sane range
+#define LEARN_OFFSET_MAX_G      5.0f
+
 // "Settled" detection between stops/pulses: wait at least PULSE_SETTLE_MIN_MS,
 // then treat the reading as stable once it hasn't moved more than
 // SETTLE_STABLE_DELTA_G for SETTLE_STABLE_HOLD_MS (capped at SETTLE_MAX_MS).

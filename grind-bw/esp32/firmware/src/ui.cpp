@@ -38,7 +38,7 @@ static uint32_t  gear_last_ms = 0;
 // ---- settings modal ----
 static lv_obj_t *modal = nullptr;
 static lv_obj_t *modal_list = nullptr;
-static lv_obj_t *btn_mode_w = nullptr, *btn_mode_t = nullptr;
+static lv_obj_t *btn_mode_pulse = nullptr, *btn_mode_learn = nullptr, *btn_mode_time = nullptr;
 static uint32_t  modal_gen = 0;
 
 static lv_color_t batt_color(int pct) {
@@ -77,15 +77,26 @@ static void pick_cb  (lv_event_t* e) {
   modal_close();
 }
 
-// highlight the active grind-mode button
+// highlight the active grind-mode button (Pulse / Learn are weight-mode
+// strategies; Time is the timer mode)
 static void refresh_mode_btns() {
-  if (!btn_mode_w || !btn_mode_t) return;
+  if (!btn_mode_pulse || !btn_mode_learn || !btn_mode_time) return;
   bool timeMode = (g_grinder.mode() == GrindMode::TIME);
-  lv_obj_set_style_bg_color(btn_mode_w, timeMode ? COL_ACCENT : COL_BLUE, 0);
-  lv_obj_set_style_bg_color(btn_mode_t, timeMode ? COL_BLUE  : COL_ACCENT, 0);
+  bool learn    = (!timeMode && g_grinder.approach() == ApproachMode::LEARN);
+  bool pulse    = (!timeMode && g_grinder.approach() == ApproachMode::PULSE);
+  lv_obj_set_style_bg_color(btn_mode_pulse, pulse    ? COL_BLUE : COL_ACCENT, 0);
+  lv_obj_set_style_bg_color(btn_mode_learn, learn    ? COL_BLUE : COL_ACCENT, 0);
+  lv_obj_set_style_bg_color(btn_mode_time,  timeMode ? COL_BLUE : COL_ACCENT, 0);
 }
-static void mode_w_cb(lv_event_t*) { g_grinder.setMode(GrindMode::WEIGHT); refresh_mode_btns(); }
-static void mode_t_cb(lv_event_t*) { g_grinder.setMode(GrindMode::TIME);   refresh_mode_btns(); }
+static void mode_pulse_cb(lv_event_t*) {
+  g_grinder.setMode(GrindMode::WEIGHT); g_grinder.setApproach(ApproachMode::PULSE); refresh_mode_btns();
+}
+static void mode_learn_cb(lv_event_t*) {
+  g_grinder.setMode(GrindMode::WEIGHT); g_grinder.setApproach(ApproachMode::LEARN); refresh_mode_btns();
+}
+static void mode_time_cb(lv_event_t*) {
+  g_grinder.setMode(GrindMode::TIME); refresh_mode_btns();
+}
 
 // ---------- helper ----------
 static lv_obj_t* mk_btn(lv_obj_t* parent, const char* txt, lv_event_cb_t cb,
@@ -270,8 +281,10 @@ static void modal_open() {
   lv_obj_set_size(mrow, LV_PCT(100), LV_SIZE_CONTENT);
   lv_obj_set_flex_flow(mrow, LV_FLEX_FLOW_ROW);
   lv_obj_set_flex_align(mrow, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-  btn_mode_w = mk_btn(mrow, "By weight", mode_w_cb, 108, 52, COL_ACCENT, &lv_font_montserrat_14, nullptr);
-  btn_mode_t = mk_btn(mrow, "By time",   mode_t_cb, 108, 52, COL_ACCENT, &lv_font_montserrat_14, nullptr);
+  // Pulse + Learn are the two weight-mode strategies; Time is the timer mode.
+  btn_mode_pulse = mk_btn(mrow, "Pulse", mode_pulse_cb, 70, 52, COL_ACCENT, &lv_font_montserrat_14, nullptr);
+  btn_mode_learn = mk_btn(mrow, "Learn", mode_learn_cb, 70, 52, COL_ACCENT, &lv_font_montserrat_14, nullptr);
+  btn_mode_time  = mk_btn(mrow, "Time",  mode_time_cb,  70, 52, COL_ACCENT, &lv_font_montserrat_14, nullptr);
   refresh_mode_btns();
 
   // scale picker
@@ -400,7 +413,8 @@ void ui_update() {
     char m[40]; snprintf(m, sizeof(m), "grinding  %.1fs", g_grinder.elapsed());
     lv_label_set_text(lbl_msg, m);
   } else if (st == GrindState::SETTLING || st == GrindState::PULSING) {
-    lv_label_set_text(lbl_msg, "approaching target...");
+    lv_label_set_text(lbl_msg, g_grinder.approach() == ApproachMode::LEARN
+                                 ? "settling..." : "approaching target...");
   } else if (st == GrindState::DONE) {   // timed out (failure)
     char m[48]; snprintf(m, sizeof(m), "timed out at %.1f g", g_grinder.finalWeight());
     lv_label_set_text(lbl_msg, m);

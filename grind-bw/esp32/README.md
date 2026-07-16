@@ -12,12 +12,20 @@ mount for the Mignon is included.
 
 ## What it does
 
-- Two grind modes, selectable in the settings screen:
-  - **By weight** (default): connects to a Bluetooth scale (Acaia Lunar/Pyxis/etc.,
-    BooKoo, or Timemore Black Mirror) and grinds to a target dose in grams. Sequence: tare → 1 s settle →
-    coarse cut to 0.5 g before target → short motor pulses that creep up to the
-    exact target. The top readout shows the live weight in `gram`.
-  - **By time**: grinds for a fixed number of seconds — no scale needed. The top
+- Three grind modes, selectable in the settings screen:
+  - **Pulse** (by weight, default): connects to a Bluetooth scale (Acaia
+    Lunar/Pyxis/etc., BooKoo, or Timemore Black Mirror) and grinds to a target
+    dose in grams. Sequence: tare → 1 s settle → coarse cut to ~0.9 g before
+    target → short motor pulses that creep up to the exact target. Precise on
+    every shot, but takes a few extra seconds of pulsing.
+  - **Learn** (by weight): also grinds to a target dose, but in a single run —
+    it cuts the motor when the scale reads a learned offset below target (0.5 g
+    to start), lets the dose settle, then compares to target. If it's off by
+    more than 0.1 g, it shifts the cut point by half the error for next time, so
+    the offset converges on your grinder's "coast" (the coffee that lands after
+    the motor stops). Faster (no pulsing) and self-tuning; the learned offset is
+    remembered across reboots. Both weight modes show the live weight in `gram`.
+  - **Time**: grinds for a fixed number of seconds — no scale needed. The top
     readout becomes a countdown in `seconds` from the target time to zero.
 - Touch UI: a big readout, a round start/stop button showing the active target
   (dose or time), − / + to adjust it, and a bottom bar with Bluetooth status,
@@ -105,20 +113,29 @@ against the reference project credited below:
 
 ## Using it
 
-Pick a grind mode in the settings gear — **By weight** (default) or **By time**.
-The choice is saved across reboots.
+Pick a grind mode in the settings gear — **Pulse** (by weight, default),
+**Learn** (by weight), or **Time**. The choice is saved across reboots.
 
-**Weight mode**
+**Pulse (weight)**
 
 1. First boot: it adopts the first supported scale it finds, then locks to it.
 2. Set the dose with − / +. Tap the circle to grind.
-3. It tares, waits a second, runs the motor to ~0.5 g short of target, then
+3. It tares, waits a second, runs the motor to ~0.9 g short of target, then
    pulses up to the exact target and stops.
 4. To use a different scale, tap the gear and pick one — that choice is saved
    and becomes the locked scale. It won't switch to another on its own, even if
    a different one is nearby.
 
-**Time mode**
+**Learn (weight)**
+
+1. Set the dose with − / +. Tap the circle to grind.
+2. It tares, waits a second, then grinds in one run and cuts the motor when the
+   scale reads the learned offset below target (0.5 g on the very first grind).
+3. After the dose settles it checks the result: if it's more than 0.1 g off, it
+   moves the cut point by half the error, so the next grind lands closer. Give
+   it a few shots to dial in; the learned offset survives reboots.
+
+**Time**
 
 1. Set the time with − / + (0.1 s steps). No scale required.
 2. Tap the circle — the top counts down from the target time to zero, the motor
@@ -128,11 +145,18 @@ The choice is saved across reboots.
 
 All knobs are at the top of [`firmware/src/config.h`](firmware/src/config.h):
 
-- Dose (weight mode): `TARGET_DEFAULT_G`, `TARGET_MIN_G`, `TARGET_MAX_G`, `TARGET_STEP_G`.
+- Dose (weight modes): `TARGET_DEFAULT_G`, `TARGET_MIN_G`, `TARGET_MAX_G`, `TARGET_STEP_G`.
 - Time (time mode): `TIME_DEFAULT_S`, `TIME_MIN_S`, `TIME_MAX_S`, `TIME_STEP_S` (0.1 s steps).
-- Approach (weight mode): `APPROACH_MARGIN_G` (coarse cut distance, default 0.5 g),
+- Pulse approach: `APPROACH_MARGIN_G` (coarse cut distance, default 0.9 g),
   `PULSE_MS` (pulse length — raise it if your grinder's motor is slow to spin up
   and pulses produce nothing), `TARGET_EPSILON_G`.
+- Learn approach: `LEARN_STOP_OFFSET_G` (initial cut offset, default 0.5 g),
+  `LEARN_RATE` (fraction of the error corrected each grind, default 0.5 —
+  lower it for slower/steadier convergence), `LEARN_DEADBAND_G` (leave the
+  offset alone when within this of target, default 0.1 g), and the
+  `LEARN_OFFSET_MIN_G`/`LEARN_OFFSET_MAX_G` clamps. The learned offset itself is
+  stored in flash; a factory-reset of the scale doesn't touch it, but flashing
+  fresh firmware that changes the NVS layout can.
 - Timing/safety: `PRE_GRIND_TARE_MS`, `MAX_GRIND_SECONDS`, `MAX_FINE_PULSES`.
 
 ## Enclosure / mount

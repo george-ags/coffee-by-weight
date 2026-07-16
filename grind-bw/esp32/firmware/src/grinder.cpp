@@ -18,6 +18,9 @@ void Grinder::begin() {
   _target     = clampf(s_prefs.getFloat("target", TARGET_DEFAULT_G), TARGET_MIN_G, TARGET_MAX_G);
   _targetTime = clampf(s_prefs.getFloat("ttime",  TIME_DEFAULT_S),   TIME_MIN_S,   TIME_MAX_S);
   _mode       = (s_prefs.getUChar("mode", 0) == 1) ? GrindMode::TIME : GrindMode::WEIGHT;
+  _approach   = (s_prefs.getUChar("appr", 0) == 1) ? ApproachMode::LEARN : ApproachMode::PULSE;
+  _learnedOffset = clampf(s_prefs.getFloat("loff", LEARN_STOP_OFFSET_G),
+                          LEARN_OFFSET_MIN_G, LEARN_OFFSET_MAX_G);
 }
 
 void Grinder::motor(bool on) {
@@ -32,11 +35,18 @@ void Grinder::persist() {
   s_prefs.putFloat("target", _target);
   s_prefs.putFloat("ttime",  _targetTime);
   s_prefs.putUChar("mode",   _mode == GrindMode::TIME ? 1 : 0);
+  s_prefs.putUChar("appr",   _approach == ApproachMode::LEARN ? 1 : 0);
 }
 
 void Grinder::setMode(GrindMode m) {
   if (_state != GrindState::IDLE) return;      // don't switch mid-grind
   _mode = m;
+  persist();
+}
+
+void Grinder::setApproach(ApproachMode a) {
+  if (_state != GrindState::IDLE) return;      // don't switch mid-grind
+  _approach = a;
   persist();
 }
 
@@ -145,8 +155,18 @@ void Grinder::update(float weight, bool scaleConnected) {
           Serial.printf("[grind] timed grind complete (%.1f s)\n", _targetTime);
           finish(weight, false);
         }
+      } else if (_approach == ApproachMode::LEARN) {
+        // Single-shot: run until the scale reads the learned offset below target,
+        // then cut and let it settle. No pulsing — the settle result trains the
+        // offset for next time.
+        if (weight >= _target - _learnedOffset) {
+          Serial.printf("[grind] learn cut at %.2f g (target %.1f, offset %.2f)\n",
+                        weight, _target, _learnedOffset);
+          beginSettle(weight);
+        }
       } else {
-        // Coarse: run until APPROACH_MARGIN_G before target, then let it settle.
+        // Coarse (pulse approach): run until APPROACH_MARGIN_G before target,
+        // then let it settle and pulse up.
         if (weight >= _target - APPROACH_MARGIN_G) {
           Serial.printf("[grind] coarse cut at %.2f g\n", weight);
           beginSettle(weight);
@@ -164,6 +184,27 @@ void Grinder::update(float weight, bool scaleConnected) {
       bool stable    = (now - _stableSinceMs) >= (uint32_t)SETTLE_STABLE_HOLD_MS;
       bool capped    = (now - _settleStartMs) >= (uint32_t)SETTLE_MAX_MS;
       if (minWaited && (stable || capped)) {
+        if (_approach == ApproachMode::LEARN) {
+          // Single-shot has settled: compare to target and shift the cut offset
+          // toward the error so next time lands closer. A timeout never reaches
+          // here (it finishes directly), so a bad grind can't corrupt the offset.
+          float err = weight - _target;                 // + = overshoot
+          if (fabsf(err) > LEARN_DEADBAND_G) {
+            _learnedOffset += LEARN_RATE * err;          // overshoot -> cut earlier
+            if (_learnedOffset < LEARN_OFFSET_MIN_G) _learnedOffset = LEARN_OFFSET_MIN_G;
+            if (_learnedOffset > LEARN_OFFSET_MAX_G) _learnedOffset = LEARN_OFFSET_MAX_G;
+            s_prefs.putFloat("loff", _learnedOffset);
+            Serial.printf("[grind] learn: got %.2f g (err %+.2f) -> offset now %.2f g\n",
+                          weight, err, _learnedOffset);
+          } else {
+            Serial.printf("[grind] learn: got %.2f g (err %+.2f, within deadband)\n",
+                          weight, err);
+          }
+          finish(weight, false);
+          break;
+        }
+
+        // ---- pulse approach (unchanged) ----
         // What did the pulse we just finished actually add?
         if (_pulseCount > 0) _lastGain = weight - _prePulseW;
         float remaining = _target - weight;
