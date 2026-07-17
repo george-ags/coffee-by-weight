@@ -19,7 +19,7 @@ mount for the Mignon is included.
     target → short motor pulses that creep up to the exact target. Precise on
     every shot, but takes a few extra seconds of pulsing.
   - **Learn** (by weight): also grinds to a target dose, but in a single run —
-    it cuts the motor when the scale reads a learned offset below target (0.5 g
+    it cuts the motor when the scale reads a learned offset below target (0.8 g
     to start), lets the dose settle, then compares to target. If it's off by
     more than 0.1 g, it shifts the cut point by half the error for next time, so
     the offset converges on your grinder's "coast" (the coffee that lands after
@@ -130,7 +130,7 @@ Pick a grind mode in the settings gear — **Pulse** (by weight, default),
 
 1. Set the dose with − / +. Tap the circle to grind.
 2. It tares, waits a second, then grinds in one run and cuts the motor when the
-   scale reads the learned offset below target (0.5 g on the very first grind).
+   scale reads the learned offset below target (0.8 g on the very first grind).
 3. After the dose settles it checks the result: if it's more than 0.1 g off, it
    moves the cut point by half the error, so the next grind lands closer. Give
    it a few shots to dial in; the learned offset survives reboots.
@@ -150,7 +150,7 @@ All knobs are at the top of [`firmware/src/config.h`](firmware/src/config.h):
 - Pulse approach: `APPROACH_MARGIN_G` (coarse cut distance, default 0.9 g),
   `PULSE_MS` (pulse length — raise it if your grinder's motor is slow to spin up
   and pulses produce nothing), `TARGET_EPSILON_G`.
-- Learn approach: `LEARN_STOP_OFFSET_G` (initial cut offset, default 0.5 g),
+- Learn approach: `LEARN_STOP_OFFSET_G` (initial cut offset, default 0.8 g),
   `LEARN_RATE` (fraction of the error corrected each grind, default 0.5 —
   lower it for slower/steadier convergence), `LEARN_DEADBAND_G` (leave the
   offset alone when within this of target, default 0.1 g), and the

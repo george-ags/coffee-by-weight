@@ -50,7 +50,7 @@ class Grinder {
   float _targetTime  = 0;        // seconds
   float _finalWeight = 0;
   bool  _timedOut    = false;
-  float _learnedOffset = 0.5f;   // learn-mode cut offset; real default/NVS value set in begin()
+  float _learnedOffset = 0.8f;   // learn-mode cut offset; real default/NVS value set in begin()
 
   uint32_t _startMs       = 0;   // motor-on (coarse) — the overall grind clock
   uint32_t _tareMs        = 0;

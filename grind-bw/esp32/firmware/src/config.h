@@ -65,7 +65,8 @@
 // converges on the "coast" (coffee that lands after the motor stops) and is
 // remembered across reboots. Because the coast is roughly dose-independent, a
 // single learned offset is shared across targets.
-#define LEARN_STOP_OFFSET_G     0.5f    // initial cut this far below target
+#define LEARN_STOP_OFFSET_G     0.8f    // initial cut this far below target (fresh units only;
+                                        // a unit that has already learned keeps its stored offset)
 #define LEARN_RATE              0.5f    // next-time correction = this x (final - target)
 #define LEARN_DEADBAND_G        0.1f    // only correct when |final - target| exceeds this
 #define LEARN_OFFSET_MIN_G      0.0f    // clamp the learned offset to a sane range
