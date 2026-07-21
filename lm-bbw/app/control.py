@@ -203,7 +203,7 @@ class ControlManager:
         self.tare_button = Button(ControlManager.TARE_GPIO, pull_up=True, hold_time=5.0)
         self.tare_button.when_held = lambda: self._restart_service()
 
-        self.memory_button = Button(ControlManager.MEM_GPIO, pull_up=True)
+        self.memory_button = Button(ControlManager.MEM_GPIO, pull_up=True, bounce_time=0.05)
         self.memory_button.when_pressed = lambda: (self._activity_detected(), self._rotate_memory())
 
         self.scale_connect_button = Button(ControlManager.SCALE_CONNECT_GPIO, pull_up=True)
