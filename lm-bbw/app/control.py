@@ -468,47 +468,52 @@ class ControlManager:
 
     def update_tare_verification(self):
         """
-        Called once per main-loop iteration while the scale is connected.
-        Confirms the hardware tare issued at shot start actually zeroed the
-        scale, and reconciles it with the software baseline:
+        Called once per main-loop iteration during a shot. Reconciles the
+        software tare baseline with the hardware tare issued at shot start.
 
-          - A sudden downward step (>= TARE_STEP_MIN) means the hardware tare
-            just landed. We absorb that step into the offset so the tracked
-            (net) weight stays continuous across it, and mark the tare
-            confirmed. This is what makes it safe to send the hardware tare at
-            all: a late landing is handled whenever it arrives instead of
-            corrupting the shot.
-          - If the window closes and the scale is still reading more than
-            TARE_CONFIRM_EPSILON grams, the tare never took effect: set
-            tare_failed (the pour continues on the software baseline, so it
-            stays accurate) so the display can warn.
+        Rule: the instant the scale physically reads ~0, the hardware tare has
+        done its job -- TRUST IT and re-anchor the software baseline to the live
+        reading (offset = raw), discarding the start-of-shot snapshot. This holds
+        whichever way the reading reached zero:
+          - a positive platter load (cup + residue) steps DOWN to zero, or
+          - a negative reading (e.g. the previous cup was lifted off between
+            shots) rises UP to zero.
+
+        Re-anchoring to the live reading is what makes the shot accurate. The old
+        signed `offset -= drop` reconciliation only fired on a downward step, so a
+        negative (or stale) start baseline was left baked into the offset and
+        net_weight() over-read by that amount for the whole shot -- stopping the
+        pour early. That shortfall was invisible in the logs because the overshoot
+        error is measured from the same inflated net.
+
+        If the confirm window closes and the scale is still off zero, flag
+        tare_failed for the display but KEEP verifying for the rest of the shot,
+        so a late-landing tare (common right after the BLE link wakes) is still
+        absorbed instead of dropping net_weight() by the whole platter load and
+        over-pouring.
         """
-        if not self._tare_verify_active:
+        # Scope verification to the shot (and its drip-out tail); outside that
+        # the display shows the raw reading anyway, so there is nothing to do.
+        if not self._tare_verify_active or not self.in_shot_window():
             return
 
         raw = self._read_scale_weight()
-        drop = self._tare_prev_raw - raw
-        self._tare_prev_raw = raw
 
-        if drop >= TARE_STEP_MIN:
-            self.shot_tare_offset -= drop
+        if abs(raw) <= TARE_CONFIRM_EPSILON:
+            self.shot_tare_offset = raw
             self._tare_verify_active = False
             self.tare_failed = False
-            logging.info("Hardware tare confirmed (absorbed %.2f g step; net %.2f g)"
-                         % (drop, self.net_weight(raw)))
+            logging.info("Hardware tare confirmed: scale at %.2f g; baseline re-anchored "
+                         "(net %.2f g)" % (raw, self.net_weight(raw)))
             return
 
-        if timer() >= self._tare_verify_deadline:
-            self._tare_verify_active = False
-            if abs(raw) <= TARE_CONFIRM_EPSILON:
-                self.tare_failed = False
-                logging.info("Tare verified: scale reading %.2f g (~zero)" % raw)
-            else:
-                self.tare_failed = True
-                logging.warning(
-                    "TARE FAILED: scale still reading %.2f g after %.1fs. Pouring on "
-                    "software tare (shot stays accurate); check the scale is in weight "
-                    "mode and connected." % (raw, TARE_VERIFY_TIMEOUT))
+        if not self.tare_failed and timer() >= self._tare_verify_deadline:
+            self.tare_failed = True
+            logging.warning(
+                "TARE not confirmed after %.1fs (scale reading %.2f g). Pouring on the "
+                "software baseline %.2f g; still watching for a late tare -- check the "
+                "scale is in weight mode and connected."
+                % (TARE_VERIFY_TIMEOUT, raw, self.shot_tare_offset))
 
     def should_scale_connect(self) -> bool:
         return self.scale_connect_button.value
