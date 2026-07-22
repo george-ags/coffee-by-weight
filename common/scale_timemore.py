@@ -282,6 +282,14 @@ def parse_frames(buffer: bytearray):
 
 
 # --- TIMEMORE SCALE CLASS ---
+
+# While the scale is off / out of range the connect loop retries every few
+# seconds. Log the first miss, then stay quiet until it reappears, emitting only
+# an occasional reminder at this interval (seconds) so a long outage still
+# leaves a breadcrumb without flooding the journal.
+SEARCH_REMINDER_INTERVAL = 300.0
+
+
 class TimemoreScale(object):
     """
     Drop-in counterpart to AcaiaScale / BookooScale for Timemore scales.
@@ -315,6 +323,12 @@ class TimemoreScale(object):
         self._watchdog_thread = None
         self._stop_event = threading.Event()
 
+        # Connect-retry log throttling (see SEARCH_REMINDER_INTERVAL). Counts
+        # consecutive failed scans since the scale was last connected; reset to 0
+        # on a successful connection so the next disappearance logs fresh.
+        self._search_miss_count = 0
+        self._search_last_reminder = 0.0
+
     # ---- connection lifecycle ----
 
     def connect(self):
@@ -326,7 +340,11 @@ class TimemoreScale(object):
         self._stop_event.clear()
         self._connect_thread = threading.Thread(target=self._connect_sync, daemon=True)
         self._connect_thread.start()
-        logging.info("Starting Timemore Connection Thread (SimplePyBLE)...")
+        # First attempt of an episode logs normally; quiet retries drop to DEBUG.
+        if self._search_miss_count == 0:
+            logging.info("Starting Timemore Connection Thread (SimplePyBLE)...")
+        else:
+            logging.debug("Starting Timemore Connection Thread (SimplePyBLE)... (retry)")
 
     def _connect_sync(self):
         try:
@@ -340,7 +358,7 @@ class TimemoreScale(object):
             target = None
             for attempt in range(3):
                 try:
-                    logging.info(f"Scanning to acquire Timemore {self.mac} (Attempt {attempt + 1})...")
+                    logging.debug(f"Scanning to acquire Timemore {self.mac} (Attempt {attempt + 1})...")
                     with adapter_scan_lock:
                         self.adapter.scan_for(2000)
                         peripherals = self.adapter.scan_get_results()
@@ -359,7 +377,19 @@ class TimemoreScale(object):
                         break
 
             if not target:
-                logging.warning(f"Device {self.mac} not found in scan.")
+                self._search_miss_count += 1
+                now = time.monotonic()
+                if self._search_miss_count == 1:
+                    logging.warning("Device %s not found in scan; will keep retrying "
+                                    "quietly until it reappears." % self.mac)
+                    self._search_last_reminder = now
+                elif now - self._search_last_reminder >= SEARCH_REMINDER_INTERVAL:
+                    logging.info("Still searching for Timemore %s (%d attempts since it "
+                                 "went missing)." % (self.mac, self._search_miss_count))
+                    self._search_last_reminder = now
+                else:
+                    logging.debug("Timemore %s not found (attempt %d)."
+                                  % (self.mac, self._search_miss_count))
                 return
 
             self._peripheral = target
@@ -372,6 +402,11 @@ class TimemoreScale(object):
 
             logging.info(f"Connected to Timemore {self.mac}")
             self.connected = True
+            if self._search_miss_count:
+                logging.info("Timemore %s reconnected after %d missed scan(s)."
+                             % (self.mac, self._search_miss_count))
+            self._search_miss_count = 0
+            self._search_last_reminder = 0.0
             self._buffer = bytearray()
             time.sleep(1.0)  # let services settle
 

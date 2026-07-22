@@ -188,6 +188,13 @@ def decode_weight_packet(packet) -> dict:
     }
 
 
+# While the scale is off / out of range the connect loop retries every few
+# seconds. We log the first miss, then stay quiet until it reappears, emitting
+# only an occasional reminder at this interval (seconds) so a long outage still
+# leaves a breadcrumb without flooding the journal.
+SEARCH_REMINDER_INTERVAL = 300.0
+
+
 # --- BOOKOO SCALE CLASS ---
 class BookooScale(object):
     """
@@ -217,6 +224,12 @@ class BookooScale(object):
         self._watchdog_thread = None
         self._stop_event = threading.Event()
 
+        # Connect-retry log throttling (see SEARCH_REMINDER_INTERVAL). Counts
+        # consecutive failed scans since the scale was last connected; reset to 0
+        # on a successful connection so the next disappearance logs fresh.
+        self._search_miss_count = 0
+        self._search_last_reminder = 0.0
+
     # ---- connection lifecycle ----
 
     def connect(self):
@@ -228,7 +241,11 @@ class BookooScale(object):
         self._stop_event.clear()
         self._connect_thread = threading.Thread(target=self._connect_sync, daemon=True)
         self._connect_thread.start()
-        logging.info("Starting BooKoo Connection Thread (SimplePyBLE)...")
+        # First attempt of an episode logs normally; quiet retries drop to DEBUG.
+        if self._search_miss_count == 0:
+            logging.info("Starting BooKoo Connection Thread (SimplePyBLE)...")
+        else:
+            logging.debug("Starting BooKoo Connection Thread (SimplePyBLE)... (retry)")
 
     def _connect_sync(self):
         try:
@@ -261,7 +278,19 @@ class BookooScale(object):
                         break
 
             if not target:
-                logging.warning(f"Device {self.mac} not found in scan.")
+                self._search_miss_count += 1
+                now = time.monotonic()
+                if self._search_miss_count == 1:
+                    logging.warning("Device %s not found in scan; will keep retrying "
+                                    "quietly until it reappears." % self.mac)
+                    self._search_last_reminder = now
+                elif now - self._search_last_reminder >= SEARCH_REMINDER_INTERVAL:
+                    logging.info("Still searching for BooKoo %s (%d attempts since it "
+                                 "went missing)." % (self.mac, self._search_miss_count))
+                    self._search_last_reminder = now
+                else:
+                    logging.debug("BooKoo %s not found (attempt %d)."
+                                  % (self.mac, self._search_miss_count))
                 return
 
             self._peripheral = target
@@ -286,6 +315,11 @@ class BookooScale(object):
                 self._peripheral.notify(self._service_uuid, self._weight_uuid,
                                         self._notification_handler)
                 logging.info("Subscribed to BooKoo weight notifications")
+                if self._search_miss_count:
+                    logging.info("BooKoo %s reconnected after %d missed scan(s)."
+                                 % (self.mac, self._search_miss_count))
+                self._search_miss_count = 0
+                self._search_last_reminder = 0.0
             except Exception as e:
                 logging.error(f"Notify failed: {e}")
                 self.disconnect()
