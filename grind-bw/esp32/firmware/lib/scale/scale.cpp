@@ -12,15 +12,6 @@
 //          contains the characteristic. Framing is 0xEF 0xDD <cmd> <len> ...
 //          with two trailing checksum bytes. Requires an ID + notification
 //          handshake and a ~2 s heartbeat or the weight stream stops.
-//
-//  Timemore  Black Mirror family (model TES017). Service 0xFFF0; notify 0xFFF1;
-//          write 0xFFF2 (write-no-response). Like BooKoo it streams once you
-//          subscribe — no handshake, no heartbeat. Frames are
-//          0xA5 0x5A <opcode> <cmd> <len:2 BE> <payload> <crc:2>, len counting
-//          payload only. Weight/flow/timer arrive as cmd 0x01 every 100 ms;
-//          battery as cmd 0x05. Commands (tare = opcode 0x03 cmd 0x0D) carry a
-//          CRC-16/MODBUS the scale checks, so unlike the others we must compute
-//          it (see crc16_modbus). See doc/BT_Scale/Timemore/protocols.md.
 
 #include "scale.h"
 #include <NimBLEDevice.h>
@@ -35,30 +26,24 @@ CoffeeScale g_scale;
 static const uint32_t ACAIA_HEARTBEAT_MS = 2000;
 
 // ---- UUIDs -----------------------------------------------------------------
-static const char* BOOKOO_SVC    = "0000ffe0-0000-1000-8000-00805f9b34fb";
-static const char* BOOKOO_NOTIFY = "0000ff11-0000-1000-8000-00805f9b34fb";
-static const char* BOOKOO_WRITE  = "0000ff12-0000-1000-8000-00805f9b34fb";
+// Reference only — setupBookoo() matches on the ff11/ff12 substring so it also
+// works when a model exposes them under a different (or 128-bit) service UUID.
+__attribute__((unused)) static const char* BOOKOO_SVC    = "0000ffe0-0000-1000-8000-00805f9b34fb";
+__attribute__((unused)) static const char* BOOKOO_NOTIFY = "0000ff11-0000-1000-8000-00805f9b34fb";
+__attribute__((unused)) static const char* BOOKOO_WRITE  = "0000ff12-0000-1000-8000-00805f9b34fb";
 static const char* ACAIA_OLD     = "00002a80-0000-1000-8000-00805f9b34fb";
 static const char* ACAIA_PYXIS   = "49535343-8841-43f4-a8d4-ecbe34729bb3";
-static const char* TIMEMORE_SVC    = "0000fff0-0000-1000-8000-00805f9b34fb";
-static const char* TIMEMORE_NOTIFY = "0000fff1-0000-1000-8000-00805f9b34fb";
-static const char* TIMEMORE_WRITE  = "0000fff2-0000-1000-8000-00805f9b34fb";
 
 // ---- name classification ---------------------------------------------------
 static const char* ACAIA_PREFIXES[]  = {"ACAIA", "PYXIS", "UMBRA", "LUNAR", "PROCH"};
 static const char* BOOKOO_PREFIXES[] = {"BOOKOO"};
-// The Timemore advertised name is user-settable; these cover the brand and the
-// Black Mirror model/type strings (TES017 = "DOT"). If your scale advertises
-// under a different name, add its prefix here.
-static const char* TIMEMORE_PREFIXES[] = {"TIMEMORE", "TES017", "BLACK MIRROR", "BLACKMIRROR"};
 
 static Vendor classify(const std::string& nameIn) {
   if (nameIn.empty()) return Vendor::NONE;
   std::string n = nameIn;
   for (auto& c : n) c = toupper((unsigned char)c);
-  for (auto p : ACAIA_PREFIXES)    if (n.find(p) != std::string::npos) return Vendor::ACAIA;
-  for (auto p : BOOKOO_PREFIXES)   if (n.find(p) != std::string::npos) return Vendor::BOOKOO;
-  for (auto p : TIMEMORE_PREFIXES) if (n.find(p) != std::string::npos) return Vendor::TIMEMORE;
+  for (auto p : ACAIA_PREFIXES)  if (n.find(p) != std::string::npos) return Vendor::ACAIA;
+  for (auto p : BOOKOO_PREFIXES) if (n.find(p) != std::string::npos) return Vendor::BOOKOO;
   return Vendor::NONE;
 }
 
@@ -125,51 +110,6 @@ static float acaiaDecodeWeight(const uint8_t* p, size_t n) {
 }
 
 // ===========================================================================
-// Timemore Black Mirror framing (see doc/BT_Scale/Timemore/protocols.md)
-// ===========================================================================
-// Weight scaling is NOT stated in the protocol doc. This assumes 0.01 g per
-// count (matching BooKoo, and consistent with weight being a 4-byte Int32 while
-// flow is only 2 bytes). VERIFY against the scale's own display: if the readout
-// is 10x/100x off, change this divisor (e.g. 10.0f for 0.1 g/count).
-static const float TIMEMORE_WEIGHT_DIV = 100.0f;
-
-// CRC-16/MODBUS: poly 0x8005 (reflected 0xA001), init 0xFFFF. The doc names it
-// "CRC-16/IBM" with init 0xFFFF, which is the Modbus parameter set — the usual
-// choice for a UART-style BLE pass-through. Verified against the canonical
-// check value crc("123456789") == 0x4B37.
-static uint16_t crc16_modbus(const uint8_t* data, size_t len) {
-  uint16_t crc = 0xFFFF;
-  for (size_t i = 0; i < len; i++) {
-    crc ^= (uint16_t)data[i];
-    for (int b = 0; b < 8; b++)
-      crc = (crc & 1) ? (crc >> 1) ^ 0xA001 : (crc >> 1);
-  }
-  return crc;
-}
-
-// Build a Timemore frame: A5 5A | opcode | cmd | len(2 BE) | payload | crc(2).
-// The doc declares multi-byte fields big-endian, so the CRC is appended MSB
-// first. If the scale rejects commands (tare has no visible effect), the most
-// likely fix is swapping these two CRC bytes — Modbus's own wire order is LSB
-// first, and docs sometimes disagree with the transport on this one field.
-static std::vector<uint8_t> timemoreFrame(uint8_t opcode, uint8_t cmd,
-                                          const uint8_t* payload, size_t n) {
-  std::vector<uint8_t> f;
-  f.reserve(n + 8);
-  f.push_back(0xA5);
-  f.push_back(0x5A);
-  f.push_back(opcode);
-  f.push_back(cmd);
-  f.push_back((uint8_t)((n >> 8) & 0xFF));
-  f.push_back((uint8_t)(n & 0xFF));
-  for (size_t i = 0; i < n; i++) f.push_back(payload[i] & 0xFF);
-  uint16_t crc = crc16_modbus(f.data(), f.size());
-  f.push_back((uint8_t)((crc >> 8) & 0xFF));
-  f.push_back((uint8_t)(crc & 0xFF));
-  return f;
-}
-
-// ===========================================================================
 // Discovery store — every supported scale seen in the last scan.
 // Written from the NimBLE host task (scan callbacks), read from the UI task,
 // so the public list is guarded by a spinlock. The parallel address array is
@@ -221,9 +161,11 @@ static void notifyTrampoline(NimBLERemoteCharacteristic*, uint8_t* data, size_t 
 class ClientCB : public NimBLEClientCallbacks {
   void onConnect(NimBLEClient*) override {
     Serial.println("[scale] link up");
+    Serial.flush();
   }
   void onDisconnect(NimBLEClient*) override {
     Serial.println("[scale] link down");
+    Serial.flush();
   }
 };
 static ClientCB s_clientCB;
@@ -233,8 +175,7 @@ static ClientCB s_clientCB;
 // ===========================================================================
 const char* CoffeeScale::vendorName() const {
   switch (vendor) { case Vendor::ACAIA: return "Acaia";
-                    case Vendor::BOOKOO: return "BooKoo";
-                    case Vendor::TIMEMORE: return "Timemore"; default: return "—"; }
+                    case Vendor::BOOKOO: return "BooKoo"; default: return "—"; }
 }
 
 static void bleTaskEntry(void* arg) { static_cast<CoffeeScale*>(arg)->_bleTask(); }
@@ -247,6 +188,13 @@ void CoffeeScale::begin(const String& savedMac, Vendor savedVendor,
   if (scanSeconds > 0) _scanSeconds = scanSeconds;
   NimBLEDevice::init(_deviceName.c_str());
   NimBLEDevice::setPower(ESP_PWR_LVL_P9);
+  // Some scales (BooKoo Ultra among them) ask the central for a security
+  // handshake right after connecting. With no I/O capability and just-works
+  // pairing configured, NimBLE answers automatically; without this the peer
+  // can drop the link mid-discovery, which looks exactly like a GATT failure.
+  NimBLEDevice::setSecurityAuth(false, false, false);   // no bonding, no MITM, no SC
+  NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
+  NimBLEDevice::setMTU(247);                            // 20-byte notifies fit either way
   xTaskCreatePinnedToCore(bleTaskEntry, "ble", 8192, this, 1, nullptr, 0);
 }
 
@@ -313,22 +261,24 @@ bool CoffeeScale::scanAndConnect() {
   NimBLEClient* client = NimBLEDevice::createClient();
   _client = client;
   client->setClientCallbacks(&s_clientCB, false);
-  // Conservative params + generous (4 s) supervision timeout for link stability.
-  // Units: interval x1.25ms (12..24 = 15..30ms), latency 0, timeout x10ms (400 = 4s).
-  client->setConnectionParams(12, 24, 0, 400);
+  // Conservative params with generous headroom for link stability.
+  // Units: interval x1.25ms (24..40 = 30..50ms), latency 0, timeout x10ms (600 = 6s).
+  // 50ms comfortably outpaces the ~10Hz weight stream. The 6s supervision
+  // timeout trades slower detection of a genuine drop for far fewer spurious
+  // ones — note the grinder's SCALE LOST cut-off inherits that latency.
+  client->setConnectionParams(24, 40, 0, 600);
+  client->setConnectTimeout(10);            // seconds; default 30 stalls the task too long
   if (!client->connect(addr)) {             // typed address preserves random/public
     Serial.println("[scale] connect failed");
+    Serial.flush();
     NimBLEDevice::deleteClient(client); _client = nullptr;
     return false;
   }
-  Serial.println("[scale] connected link, discovering services…");
+  Serial.printf("[scale] connected link (mtu %u), discovering services…\n",
+                (unsigned)client->getMTU());
+  Serial.flush();
 
-  bool ok;
-  switch (vendor) {
-    case Vendor::BOOKOO:   ok = setupBookoo();   break;
-    case Vendor::TIMEMORE: ok = setupTimemore(); break;
-    default:               ok = setupAcaia();    break;
-  }
+  bool ok = (vendor == Vendor::BOOKOO) ? setupBookoo() : setupAcaia();
   if (!ok) { dropConnection(); return false; }
 
   connected = true;
@@ -360,35 +310,97 @@ void CoffeeScale::selectScale(const String& mac, Vendor v) {
 
 void CoffeeScale::rescan() { _reconnect = true; }   // refresh discovery, reconnect
 
-bool CoffeeScale::setupBookoo() {
-  auto* client = static_cast<NimBLEClient*>(_client);
-  NimBLERemoteService* svc = client->getService(BOOKOO_SVC);
-  if (!svc) { Serial.println("[scale] BooKoo service FFE0 not found"); return false; }
-  auto* notify = svc->getCharacteristic(BOOKOO_NOTIFY);
-  auto* write  = svc->getCharacteristic(BOOKOO_WRITE);
-  if (!notify || !write) { Serial.println("[scale] BooKoo chars not found"); return false; }
-  _notifyChar = notify; _writeChar = write;
-  if (!notify->subscribe(true, notifyTrampoline)) { Serial.println("[scale] BooKoo subscribe failed"); return false; }
-  Serial.println("[scale] BooKoo subscribed");
-  return true;
+// Standard GATT services that never carry the weight stream — skipped when
+// falling back to "first notify characteristic in a vendor service".
+// NimBLE prints 16-bit UUIDs short ("0x1800") and 128-bit ones in full, so
+// match on the 4 significant hex digits either way.
+static bool isGenericService(const std::string& u) {
+  static const char* kGeneric[] = {"1800", "1801", "180a", "180f", "fe59"};
+  for (auto* g : kGeneric) {
+    if (u == std::string("0x") + g) return true;             // short form
+    if (u.compare(0, 8, std::string("0000") + g) == 0) return true;  // 128-bit form
+  }
+  return false;
 }
 
-bool CoffeeScale::setupTimemore() {
+bool CoffeeScale::setupBookoo() {
   auto* client = static_cast<NimBLEClient*>(_client);
-  NimBLERemoteService* svc = client->getService(TIMEMORE_SVC);
-  if (!svc) { Serial.println("[scale] Timemore service FFF0 not found"); return false; }
-  auto* notify = svc->getCharacteristic(TIMEMORE_NOTIFY);
-  auto* write  = svc->getCharacteristic(TIMEMORE_WRITE);
-  if (!notify || !write) { Serial.println("[scale] Timemore chars FFF1/FFF2 not found"); return false; }
-  _notifyChar = notify; _writeChar = write;
-  // Subscribing enables the 0x01 weight stream (every 100 ms) — no handshake or
-  // heartbeat, same as BooKoo.
-  if (!notify->subscribe(true, notifyTrampoline)) { Serial.println("[scale] Timemore subscribe failed"); return false; }
-  Serial.println("[scale] Timemore subscribed");
-  // Best-effort: request the current battery level (0x05 is read/notify and may
-  // not push until it changes). Harmless if the scale ignores it.
-  auto rb = timemoreFrame(0x02, 0x05, nullptr, 0);
-  writeRaw(rb.data(), rb.size());
+
+  // Give the peer a moment before hammering it with discovery. The Ultra can
+  // drop the link if discovery starts the instant the connection completes.
+  vTaskDelay(pdMS_TO_TICKS(300));
+  if (!client->isConnected()) {
+    Serial.println("[scale] BooKoo: peer dropped us before discovery");
+    Serial.flush();
+    return false;
+  }
+
+  // Enumerate everything instead of asking for FFE0 by name: newer BooKoo
+  // models don't all use the 0xFFE0 layout, and a plain getService() miss
+  // gives no clue what they *do* use.
+  std::vector<NimBLERemoteService*>* services = client->getServices(true);
+  if (!services || services->empty()) {
+    Serial.println("[scale] BooKoo: discovery returned NO services (link dropped)");
+    Serial.flush();
+    return false;
+  }
+
+  NimBLERemoteCharacteristic *notify = nullptr, *write = nullptr;   // exact FF11 / FF12
+  NimBLERemoteCharacteristic *anyNotify = nullptr, *anyWrite = nullptr;  // fallback
+
+  Serial.printf("[scale] %u services discovered:\n", (unsigned)services->size());
+  Serial.flush();
+  for (auto* svc : *services) {
+    std::string su = svc->getUUID().toString();
+    for (auto& c : su) c = tolower((unsigned char)c);
+    Serial.printf("  svc %s\n", su.c_str());
+    Serial.flush();
+    auto* chars = svc->getCharacteristics(true);
+    if (!chars) { Serial.println("    (no characteristics)"); Serial.flush(); continue; }
+    for (auto* ch : *chars) {
+      std::string u = ch->getUUID().toString();
+      for (auto& c : u) c = tolower((unsigned char)c);
+      bool canN = ch->canNotify() || ch->canIndicate();
+      bool canW = ch->canWrite() || ch->canWriteNoResponse();
+      Serial.printf("    chr %s%s%s\n", u.c_str(), canN ? " [notify]" : "", canW ? " [write]" : "");
+      Serial.flush();
+      vTaskDelay(pdMS_TO_TICKS(5));            // don't outrun the USB-CDC buffer
+
+      if (u.find("ff11") != std::string::npos && canN) notify = ch;
+      if (u.find("ff12") != std::string::npos && canW) write  = ch;
+      if (!isGenericService(su)) {
+        if (!anyNotify && canN) anyNotify = ch;
+        if (!anyWrite  && canW) anyWrite  = ch;
+      }
+    }
+  }
+
+  if (!notify && anyNotify) {
+    notify = anyNotify;
+    Serial.println("[scale] BooKoo: no FF11 — falling back to first vendor notify char");
+  }
+  if (!write && anyWrite) {
+    write = anyWrite;
+    Serial.println("[scale] BooKoo: no FF12 — falling back to first vendor write char");
+  }
+  if (!notify) {
+    Serial.println("[scale] BooKoo: no usable notify characteristic in the list above");
+    Serial.flush();
+    return false;
+  }
+
+  // A missing write char is survivable: weight still streams, only tare breaks.
+  _notifyChar = notify;
+  _writeChar  = write;
+  if (!write) Serial.println("[scale] BooKoo: WARNING no write char — tare will not work");
+
+  if (!notify->subscribe(true, notifyTrampoline)) {
+    Serial.println("[scale] BooKoo subscribe failed");
+    Serial.flush();
+    return false;
+  }
+  Serial.printf("[scale] BooKoo subscribed on %s\n", notify->getUUID().toString().c_str());
+  Serial.flush();
   return true;
 }
 
@@ -468,21 +480,26 @@ void CoffeeScale::dropConnection() {
   connected = false;
   weight = 0.0f;
   auto* client = static_cast<NimBLEClient*>(_client);
+  // Null the handles first: nothing else may touch the client while it tears down.
+  _client = _writeChar = _notifyChar = nullptr;
   if (client) {
-    if (client->isConnected()) client->disconnect();
+    if (client->isConnected()) {
+      client->disconnect();
+      // Deleting a client whose disconnect is still in flight can wedge the
+      // NimBLE host, which makes the *next* connect fail for unrelated reasons.
+      for (int i = 0; i < 50 && client->isConnected(); i++) vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    vTaskDelay(pdMS_TO_TICKS(100));
     NimBLEDevice::deleteClient(client);
   }
-  _client = _writeChar = _notifyChar = nullptr;
   Serial.println("[scale] disconnected");
+  Serial.flush();
 }
 
 void CoffeeScale::tare() {
   if (!connected) return;
   if (vendor == Vendor::BOOKOO) {
     writeRaw(BK_TARE, sizeof(BK_TARE));
-  } else if (vendor == Vendor::TIMEMORE) {
-    auto t = timemoreFrame(0x03, 0x0D, nullptr, 0);   // opcode Write, cmd Tare
-    writeRaw(t.data(), t.size());
   } else if (vendor == Vendor::ACAIA) {
     auto t = acaiaTare();
     writeRaw(t.data(), t.size());
@@ -491,14 +508,28 @@ void CoffeeScale::tare() {
 
 // ---- notification dispatch -------------------------------------------------
 void CoffeeScale::_onNotify(const uint8_t* data, size_t len) {
-  switch (vendor) {
-    case Vendor::BOOKOO:   bookooDecode(data, len);   break;
-    case Vendor::TIMEMORE: timemoreDecode(data, len); break;
-    default:               acaiaFeed(data, len);      break;
-  }
+  if (vendor == Vendor::BOOKOO) bookooDecode(data, len);
+  else                          acaiaFeed(data, len);
 }
 
+// Set to a nonzero count to hex-dump that many notifications in the monitor —
+// useful when a new model connects fine but the weight sticks at 0.0.
+// Confirmed for the BooKoo Ultra (frames are standard 03 0B ..., 20 bytes), so
+// leave at 0: logging from the notify context floods the USB-CDC buffer and
+// garbles surrounding output.
+#define BOOKOO_LOG_PACKETS 0
+
 void CoffeeScale::bookooDecode(const uint8_t* p, size_t len) {
+#if BOOKOO_LOG_PACKETS
+  static int s_logged = 0;
+  if (s_logged < BOOKOO_LOG_PACKETS) {
+    s_logged++;
+    Serial.printf("[scale] bookoo pkt (%u): ", (unsigned)len);
+    for (size_t i = 0; i < len && i < 24; i++) Serial.printf("%02X ", p[i]);
+    Serial.println();
+    Serial.flush();
+  }
+#endif
   if (len < 20) return;
   if (p[0] != 0x03 || p[1] != 0x0B) return;          // product / type
   uint32_t raw = ((uint32_t)p[7] << 16) | ((uint32_t)p[8] << 8) | p[9];
@@ -507,32 +538,6 @@ void CoffeeScale::bookooDecode(const uint8_t* p, size_t len) {
   weight = w;
   int b = p[13];                                      // battery %
   battery = b < 0 ? 0 : (b > 100 ? 100 : b);
-}
-
-void CoffeeScale::timemoreDecode(const uint8_t* p, size_t len) {
-  // Frames: A5 5A | opcode | cmd | len(2 BE) | payload | crc(2). A notification
-  // normally carries one complete frame; walk the buffer in case two are
-  // concatenated, and resync on a bad header. CRC is not checked on RX — the
-  // header + length gate is enough for a display value (the scale computes its
-  // own CRC; we only need ours right on the command path).
-  size_t i = 0;
-  while (i + 8 <= len) {                              // min frame = 6 hdr + 0 payload + 2 crc
-    if (p[i] != 0xA5 || p[i + 1] != 0x5A) { i++; continue; }
-    uint8_t  cmd  = p[i + 3];
-    uint16_t plen = ((uint16_t)p[i + 4] << 8) | p[i + 5];
-    size_t   end  = i + 6 + plen + 2;                 // header+len .. payload .. crc
-    if (end > len) break;                             // incomplete frame
-    const uint8_t* d = &p[i + 6];
-    if (cmd == 0x01 && plen >= 4) {                   // weight / flow / timer
-      int32_t raw = (int32_t)(((uint32_t)d[0] << 24) | ((uint32_t)d[1] << 16) |
-                              ((uint32_t)d[2] << 8)  |  (uint32_t)d[3]);
-      weight = raw / TIMEMORE_WEIGHT_DIV;
-    } else if (cmd == 0x05 && plen >= 2) {            // battery: [bars][percent]
-      int bat = d[1];
-      battery = bat < 0 ? 0 : (bat > 100 ? 100 : bat);
-    }
-    i = end;
-  }
 }
 
 void CoffeeScale::acaiaFeed(const uint8_t* data, size_t len) {
