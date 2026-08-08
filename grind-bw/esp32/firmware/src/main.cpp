@@ -19,16 +19,17 @@
 
 static Preferences s_scalePrefs;
 
+// Last MAC written to NVS. Seeded in setup() from the stored value so the boot
+// load doesn't immediately write the same string back.
+static String s_lastSavedMac;
+
 static Vendor vendorFromStr(const String& s) {
-  if (s.equalsIgnoreCase("bookoo"))   return Vendor::BOOKOO;
-  if (s.equalsIgnoreCase("timemore")) return Vendor::TIMEMORE;
-  if (s.equalsIgnoreCase("acaia"))    return Vendor::ACAIA;
+  if (s.equalsIgnoreCase("bookoo")) return Vendor::BOOKOO;
+  if (s.equalsIgnoreCase("acaia"))  return Vendor::ACAIA;
   return Vendor::NONE;
 }
 static const char* vendorToStr(Vendor v) {
-  return v == Vendor::BOOKOO   ? "bookoo"
-       : v == Vendor::TIMEMORE ? "timemore"
-       : v == Vendor::ACAIA    ? "acaia" : "";
+  return v == Vendor::BOOKOO ? "bookoo" : (v == Vendor::ACAIA ? "acaia" : "");
 }
 
 void setup() {
@@ -49,6 +50,7 @@ void setup() {
   s_scalePrefs.begin("grindbw_ble", false);
   String   savedMac    = s_scalePrefs.getString("mac", "");
   Vendor   savedVendor = vendorFromStr(s_scalePrefs.getString("vendor", ""));
+  s_lastSavedMac = savedMac;                 // don't rewrite what we just read
   g_scale.begin(savedMac, savedVendor, BLE_DEVICE_NAME, SCAN_SECONDS);
 }
 
@@ -61,16 +63,17 @@ void loop() {
   // Refresh the screen.
   ui_update();
 
-  // Persist the scale identity once connected (so next boot reconnects fast).
-  static bool saved = false;
-  if (g_scale.connected && !saved && g_scale.macAddress().length()) {
-    s_scalePrefs.putString("mac", g_scale.macAddress());
+  // Persist the scale identity as soon as one is chosen — not only once it
+  // connects. Saving on connect means picking a new scale that then fails to
+  // link is forgotten across a reboot, leaving the firmware hunting for the
+  // old scale forever.
+  String curMac = g_scale.macAddress();
+  if (curMac.length() && curMac != s_lastSavedMac) {
+    s_scalePrefs.putString("mac", curMac);
     s_scalePrefs.putString("vendor", vendorToStr(g_scale.vendor));
-    saved = true;
-    Serial.printf("[main] saved scale %s (%s)\n",
-                  g_scale.macAddress().c_str(), g_scale.vendorName());
+    s_lastSavedMac = curMac;
+    Serial.printf("[main] saved scale %s (%s)\n", curMac.c_str(), g_scale.vendorName());
   }
-  if (!g_scale.connected) saved = false;
 
   delay(5);   // keep LVGL responsive without starving the BLE task
 }
