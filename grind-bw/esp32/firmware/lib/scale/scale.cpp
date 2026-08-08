@@ -51,7 +51,18 @@ static Vendor classify(const std::string& nameIn) {
 // BooKoo command frames (verbatim from spec, see scale_bookoo.py)
 // ===========================================================================
 static const uint8_t BK_TARE[]        = {0x03,0x0A,0x01,0x00,0x00,0x08};
-// (start/stop/reset timer frames exist but a grinder doesn't need them)
+// Reset-timer. BooKoo frames end in an XOR of the preceding bytes:
+//   03^0A^06^00^00 = 0x0F   (same rule gives 0x08 for the tare frame above)
+// The grinder never uses the scale's stopwatch, so resetting it is a no-op
+// functionally — but it is a write, which is the point (see BOOKOO_KEEPALIVE_MS).
+static const uint8_t BK_RESET_TIMER[] = {0x03,0x0A,0x06,0x00,0x00,0x0F};
+
+// BooKoo scales have a scale-side idle timeout and, unlike Acaia, no protocol
+// heartbeat — so a connected-but-silent central looks idle to them and they
+// power down. Poke them periodically to reset that timer. Set to 0 to disable
+// if your model beeps on the command or shuts down regardless (in which case
+// the auto-off setting in the BooKoo app is the real fix).
+#define BOOKOO_KEEPALIVE_MS  30000
 
 // ===========================================================================
 // Acaia message encoding (ported from scale_acaia.py)
@@ -401,6 +412,7 @@ bool CoffeeScale::setupBookoo() {
   }
   Serial.printf("[scale] BooKoo subscribed on %s\n", notify->getUUID().toString().c_str());
   Serial.flush();
+  _lastHeartbeat = millis();       // arms the keep-alive clock
   return true;
 }
 
@@ -474,6 +486,17 @@ void CoffeeScale::serviceLink() {
       }
     }
   }
+#if BOOKOO_KEEPALIVE_MS
+  else if (vendor == Vendor::BOOKOO && _writeChar) {
+    // Not a protocol requirement — purely to stop the scale idling itself off.
+    // Reuses _lastHeartbeat as "time of last write to the scale".
+    uint32_t now = millis();
+    if (now - _lastHeartbeat >= (uint32_t)BOOKOO_KEEPALIVE_MS) {
+      writeRaw(BK_RESET_TIMER, sizeof(BK_RESET_TIMER));
+      _lastHeartbeat = now;
+    }
+  }
+#endif
 }
 
 void CoffeeScale::dropConnection() {
@@ -538,6 +561,19 @@ void CoffeeScale::bookooDecode(const uint8_t* p, size_t len) {
   weight = w;
   int b = p[13];                                      // battery %
   battery = b < 0 ? 0 : (b > 100 ? 100 : b);
+
+  // The scale reports its own auto-standby setting in p[14..15] (minutes).
+  // Log it once per connection: if the scale keeps powering off but this says
+  // 60, the culprit is a separate inactivity setting in the BooKoo app, not
+  // the standby timer, and no amount of BLE traffic will change it.
+  static uint16_t s_lastStandby = 0xFFFF;
+  uint16_t standby = ((uint16_t)p[14] << 8) | p[15];
+  if (standby != s_lastStandby) {
+    s_lastStandby = standby;
+    Serial.printf("[scale] BooKoo standby setting: %u min (battery %d%%)\n",
+                  (unsigned)standby, battery);
+    Serial.flush();
+  }
 }
 
 void CoffeeScale::acaiaFeed(const uint8_t* data, size_t len) {
