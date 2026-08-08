@@ -50,19 +50,25 @@ static Vendor classify(const std::string& nameIn) {
 // ===========================================================================
 // BooKoo command frames (verbatim from spec, see scale_bookoo.py)
 // ===========================================================================
+// Command frames, verbatim from the vendor spec
+// (doc/BT_Scales/BooKooCode/OpenSource/bookoo_ultra_scale/protocols.md).
+// The spec's DATASUM column is internally inconsistent with its own stated XOR
+// rule for the timer commands, so — as in common/scale_bookoo.py — send the
+// exact bytes the spec lists rather than recomputing them.
 static const uint8_t BK_TARE[]        = {0x03,0x0A,0x01,0x00,0x00,0x08};
-// Reset-timer. BooKoo frames end in an XOR of the preceding bytes:
-//   03^0A^06^00^00 = 0x0F   (same rule gives 0x08 for the tare frame above)
-// The grinder never uses the scale's stopwatch, so resetting it is a no-op
-// functionally — but it is a write, which is the point (see BOOKOO_KEEPALIVE_MS).
-static const uint8_t BK_RESET_TIMER[] = {0x03,0x0A,0x06,0x00,0x00,0x0F};
+static const uint8_t BK_RESET_TIMER[] = {0x03,0x0A,0x06,0x00,0x00,0x0C};
 
-// BooKoo scales have a scale-side idle timeout and, unlike Acaia, no protocol
-// heartbeat — so a connected-but-silent central looks idle to them and they
-// power down. Poke them periodically to reset that timer. Set to 0 to disable
-// if your model beeps on the command or shuts down regardless (in which case
-// the auto-off setting in the BooKoo app is the real fix).
-#define BOOKOO_KEEPALIVE_MS  30000
+// Auto-shutdown duration, spec row "03 0A 03 00 05~1e checkSum": the scale's
+// idle power-off, adjustable 5–30 minutes. This is what actually stops the
+// scale disappearing mid-session — BooKoo has no heartbeat, so no amount of
+// BLE traffic keeps it awake; the timeout has to be raised on the scale itself.
+// Sent once per connection. Set to 0 to leave the scale's own setting alone.
+#define BOOKOO_AUTO_OFF_MIN  30
+
+// A periodic write was tried as a keep-alive and did not help, which the spec
+// explains: the shutdown is a scale-side timer, not a link-activity timer.
+// Leave disabled.
+#define BOOKOO_KEEPALIVE_MS  0
 
 // ===========================================================================
 // Acaia message encoding (ported from scale_acaia.py)
@@ -162,7 +168,10 @@ class ScanCB : public NimBLEAdvertisedDeviceCallbacks {
 };
 
 // notify trampoline -> instance
+static volatile uint32_t s_lastNotifyMs = 0;   // when the scale last sent data
+static uint32_t          s_linkUpMs     = 0;   // when the current link came up
 static void notifyTrampoline(NimBLERemoteCharacteristic*, uint8_t* data, size_t len, bool) {
+  s_lastNotifyMs = millis();
   g_scale._onNotify(data, len);
 }
 
@@ -293,7 +302,10 @@ bool CoffeeScale::scanAndConnect() {
   if (!ok) { dropConnection(); return false; }
 
   connected = true;
+  s_linkUpMs     = millis();
+  s_lastNotifyMs = millis();
   Serial.println("[scale] connected");
+  Serial.flush();
   return true;
 }
 
@@ -412,6 +424,25 @@ bool CoffeeScale::setupBookoo() {
   }
   Serial.printf("[scale] BooKoo subscribed on %s\n", notify->getUUID().toString().c_str());
   Serial.flush();
+
+#if BOOKOO_AUTO_OFF_MIN
+  // Raise the scale's idle power-off timer. The spec gives no example DATASUM
+  // for this row (it just says "checkSum"), so compute it with the documented
+  // XOR rule — which is the rule the tare frame's published 0x08 confirms.
+  if (_writeChar) {
+    vTaskDelay(pdMS_TO_TICKS(200));            // let the subscription settle first
+    uint8_t mins = BOOKOO_AUTO_OFF_MIN;
+    if (mins < 5)  mins = 5;                   // spec range is 5..30 minutes
+    if (mins > 30) mins = 30;
+    uint8_t f[6] = {0x03, 0x0A, 0x03, 0x00, mins, 0x00};
+    f[5] = f[0] ^ f[1] ^ f[2] ^ f[3] ^ f[4];
+    writeRaw(f, sizeof(f));
+    Serial.printf("[scale] BooKoo: set auto-off to %u min [%02X %02X %02X %02X %02X %02X]\n",
+                  (unsigned)mins, f[0], f[1], f[2], f[3], f[4], f[5]);
+    Serial.flush();
+  }
+#endif
+
   _lastHeartbeat = millis();       // arms the keep-alive clock
   return true;
 }
@@ -471,7 +502,30 @@ void CoffeeScale::writeRaw(const uint8_t* data, size_t len) {
 
 void CoffeeScale::serviceLink() {
   auto* client = static_cast<NimBLEClient*>(_client);
-  if (!client || !client->isConnected()) { dropConnection(); return; }
+  if (!client || !client->isConnected()) {
+    uint32_t now = millis();
+    Serial.printf("[scale] LINK LOST after %.1fs up; last data %.1fs ago\n",
+                  (now - s_linkUpMs) / 1000.0f, (now - s_lastNotifyMs) / 1000.0f);
+    Serial.flush();
+    dropConnection();
+    return;
+  }
+
+  // Periodic pulse so the monitor brackets when things stop. The gap between
+  // "last data" growing and the link dropping is the tell: if the scale stops
+  // streaming well before the link dies, it powered itself down. If data flows
+  // right up to an abrupt drop, it is an RF/link problem instead.
+  {
+    static uint32_t s_lastAliveLog = 0;
+    uint32_t now = millis();
+    if (now - s_lastAliveLog >= 15000) {
+      s_lastAliveLog = now;
+      Serial.printf("[scale] alive: up %.0fs, last data %.1fs ago, w=%.2f batt=%d%%\n",
+                    (now - s_linkUpMs) / 1000.0f, (now - s_lastNotifyMs) / 1000.0f,
+                    weight, battery);
+      Serial.flush();
+    }
+  }
 
   if (vendor == Vendor::ACAIA && _notifyChar) {
     uint32_t now = millis();
@@ -570,8 +624,10 @@ void CoffeeScale::bookooDecode(const uint8_t* p, size_t len) {
   uint16_t standby = ((uint16_t)p[14] << 8) | p[15];
   if (standby != s_lastStandby) {
     s_lastStandby = standby;
-    Serial.printf("[scale] BooKoo standby setting: %u min (battery %d%%)\n",
-                  (unsigned)standby, battery);
+    // p[5] is the scale's display unit (0x01 ounce, 0x02 gram). The payload
+    // weight is always grams regardless, so this is informational only.
+    Serial.printf("[scale] BooKoo auto-off now %u min (battery %d%%, display %s)\n",
+                  (unsigned)standby, battery, p[5] == 0x01 ? "oz" : "g");
     Serial.flush();
   }
 }
