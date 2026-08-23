@@ -1,9 +1,9 @@
 // ui.cpp — GRIND-BW screen.
 //
 // Layout (portrait 280x456):
-//   • live weight (big) + "g"                         <- what the scale reads now
-//   • [ - ]  ( round red target = START/STOP )  [ + ] <- tap the circle to grind
-//   • [ BT ]      [ battery % ]      [ gear ]          <- status + scale picker
+//   • [ - ]   live weight (big) + "g"   [ + ]   <- readout and target adjust, one row
+//   • ( big round red target = START/STOP )     <- tap the circle to grind
+//   • [ BT ]      [ battery % ]      [ gear ]   <- status + scale picker
 //   • message line
 //
 // The gear opens a modal listing every scale discovered in the last BLE scan;
@@ -25,11 +25,13 @@ static lv_obj_t *btn_start, *lbl_start;          // round target / start-stop
 static lv_obj_t *lbl_conn, *lbl_batt, *btn_gear;
 static lv_obj_t *lbl_msg;
 
-// Gear teeth around the start button — small gray squares that spin while the
-// motor is turning (grinding / pulsing).
+// Start/stop circle + the gear teeth around it — small gray squares that spin
+// while the motor is turning (grinding / pulsing). The teeth are children of
+// the button, so their radius/size scale with START_BTN_PX.
+#define START_BTN_PX     198     // round start/stop button (was 132, +50%)
 #define GEAR_TEETH       12
-#define GEAR_RADIUS      58      // centre-to-tooth; keeps the whole tooth inside the rim
-#define GEAR_TOOTH_PX    12
+#define GEAR_RADIUS      87      // centre-to-tooth; keeps the whole tooth inside the rim
+#define GEAR_TOOTH_PX    18
 #define GEAR_DEG_PER_MS  0.24f   // ~one revolution every 1.5 s
 static lv_obj_t *teeth[GEAR_TEETH];
 static float     gear_angle   = 0;
@@ -143,13 +145,25 @@ void ui_create() {
   lv_obj_set_flex_align(scr, LV_FLEX_ALIGN_SPACE_AROUND, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
   lv_obj_set_style_pad_all(scr, 10, 0);
 
-  // --- live weight ---
-  lv_obj_t* wbox = lv_obj_create(scr);
+  // --- top row: [-]   live weight   [+] ---
+  // -/+ sit next to the readout so both thumb targets are in the upper half.
+  lv_obj_t* trow = lv_obj_create(scr);
+  lv_obj_remove_style_all(trow);
+  lv_obj_set_size(trow, LV_PCT(100), LV_SIZE_CONTENT);
+  lv_obj_set_flex_flow(trow, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(trow, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+  btn_minus = mk_btn(trow, LV_SYMBOL_MINUS, minus_cb, 60, 88, COL_ACCENT, &lv_font_montserrat_28, nullptr);
+  lv_obj_set_style_radius(btn_minus, LV_RADIUS_CIRCLE, 0);
+
+  lv_obj_t* wbox = lv_obj_create(trow);
   lv_obj_remove_style_all(wbox);
-  lv_obj_set_size(wbox, LV_PCT(100), LV_SIZE_CONTENT);
+  lv_obj_set_height(wbox, LV_SIZE_CONTENT);
+  lv_obj_set_flex_grow(wbox, 1);                 // takes whatever -/+ leave (~140 px)
   lv_obj_set_flex_flow(wbox, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_flex_align(wbox, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
   lbl_weight = lv_label_create(wbox);
+  lv_label_set_long_mode(lbl_weight, LV_LABEL_LONG_CLIP);   // never wrap onto 2 lines
   lv_obj_set_style_text_color(lbl_weight, COL_FG, 0);
   lv_obj_set_style_text_font(lbl_weight, &lv_font_montserrat_48, 0);
   lv_label_set_text(lbl_weight, "0.0");
@@ -158,20 +172,14 @@ void ui_create() {
   lv_obj_set_style_text_font(lbl_weight_u, &lv_font_montserrat_20, 0);
   lv_label_set_text(lbl_weight_u, "g");
 
-  // --- target row: [-] (start circle) [+] ---
-  lv_obj_t* trow = lv_obj_create(scr);
-  lv_obj_remove_style_all(trow);
-  lv_obj_set_size(trow, LV_PCT(100), LV_SIZE_CONTENT);
-  lv_obj_set_flex_flow(trow, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(trow, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  btn_plus = mk_btn(trow, LV_SYMBOL_PLUS, plus_cb, 60, 88, COL_ACCENT, &lv_font_montserrat_28, nullptr);
+  lv_obj_set_style_radius(btn_plus, LV_RADIUS_CIRCLE, 0);
 
-  btn_minus = mk_btn(trow, LV_SYMBOL_MINUS, minus_cb, 60, 96, COL_ACCENT, &lv_font_montserrat_28, nullptr);
-  lv_obj_set_style_radius(btn_minus, LV_RADIUS_CIRCLE, 0);
-
-  // Red start/stop circle. The gray gear teeth are children of the button, so
-  // they sit on top of the red fill, just inside the rim, and spin while the
-  // motor is running.
-  btn_start = mk_btn(trow, "0", start_cb, 132, 132, COL_RED, &lv_font_montserrat_48, &lbl_start);
+  // --- big start/stop circle, centred on its own row ---
+  // The gray gear teeth are children of the button, so they sit on top of the
+  // red fill, just inside the rim, and spin while the motor is running.
+  btn_start = mk_btn(scr, "0", start_cb, START_BTN_PX, START_BTN_PX, COL_RED,
+                     &lv_font_montserrat_48, &lbl_start);
   lv_obj_set_style_radius(btn_start, LV_RADIUS_CIRCLE, 0);
   for (int i = 0; i < GEAR_TEETH; i++) {
     lv_obj_t* t = lv_obj_create(btn_start);
@@ -179,15 +187,12 @@ void ui_create() {
     lv_obj_set_size(t, GEAR_TOOTH_PX, GEAR_TOOTH_PX);
     lv_obj_set_style_bg_color(t, COL_TEETH, 0);
     lv_obj_set_style_bg_opa(t, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(t, 2, 0);
+    lv_obj_set_style_radius(t, 3, 0);
     lv_obj_clear_flag(t, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_clear_flag(t, LV_OBJ_FLAG_SCROLLABLE);
     teeth[i] = t;
   }
   for (int i = 0; i < GEAR_TEETH; i++) place_tooth(i, 0);   // static start position
-
-  btn_plus = mk_btn(trow, LV_SYMBOL_PLUS, plus_cb, 60, 96, COL_ACCENT, &lv_font_montserrat_28, nullptr);
-  lv_obj_set_style_radius(btn_plus, LV_RADIUS_CIRCLE, 0);
 
   // --- bottom bar: conn | battery | gear ---
   lv_obj_t* bar = lv_obj_create(scr);
