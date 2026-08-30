@@ -63,7 +63,7 @@ static const uint8_t BK_RESET_TIMER[] = {0x03,0x0A,0x06,0x00,0x00,0x0C};
 // scale disappearing mid-session — BooKoo has no heartbeat, so no amount of
 // BLE traffic keeps it awake; the timeout has to be raised on the scale itself.
 // Sent once per connection. Set to 0 to leave the scale's own setting alone.
-#define BOOKOO_AUTO_OFF_MIN  30
+#define BOOKOO_AUTO_OFF_MIN  5
 
 // A periodic write was tried as a keep-alive and did not help, which the spec
 // explains: the shutdown is a scale-side timer, not a link-activity timer.
