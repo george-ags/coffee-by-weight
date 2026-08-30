@@ -14,9 +14,11 @@ mount for the Mignon is included.
 
 - Three grind modes, selectable in the settings screen:
   - **Pulse** (by weight, default): connects to a Bluetooth scale (Acaia
-    Lunar/Pyxis/etc., BooKoo, or Timemore Black Mirror) and grinds to a target
-    dose in grams. Sequence: tare → 1 s settle → coarse cut to ~0.9 g before
-    target → short motor pulses that creep up to the exact target. Precise on
+    Lunar/Pyxis/etc. or BooKoo) and grinds to a target dose in grams.
+    Sequence: tare → 1 s settle → coarse cut to ~0.9 g before target → short
+    motor pulses that creep up to the exact target. Each pulse is tapered to
+    the remaining deficit, and the grind stops one pulse early when another
+    burst would overshoot by more than stopping now undershoots. Precise on
     every shot, but takes a few extra seconds of pulsing.
   - **Learn** (by weight): also grinds to a target dose, but in a single run —
     it cuts the motor when the scale reads a learned offset below target (0.8 g
@@ -27,10 +29,16 @@ mount for the Mignon is included.
     remembered across reboots. Both weight modes show the live weight in `gram`.
   - **Time**: grinds for a fixed number of seconds — no scale needed. The top
     readout becomes a countdown in `seconds` from the target time to zero.
-- Touch UI: a big readout, a round start/stop button showing the active target
-  (dose or time), − / + to adjust it, and a bottom bar with Bluetooth status,
-  color-coded battery %, and a settings gear. The button is styled as a gear
-  whose teeth spin while the motor is running.
+- Touch UI, top to bottom: − / + either side of the big readout (both thumb
+  targets in the upper half of the screen), then a large round start/stop
+  circle showing the active target (dose or time), then a bottom bar with
+  Bluetooth status, color-coded battery %, and a settings gear, and a message
+  line under it. The circle is styled as a gear whose teeth spin while the
+  motor is running; a finished grind flashes it green with "HERE YOU GO" and
+  holds the final dose on screen for 10 s.
+- Safety in the UI: − / + are locked while a grind is running, and the start
+  circle is disabled in the weight modes until a scale is connected. If the
+  scale drops mid-grind the motor is cut immediately ("SCALE LOST" on serial).
 - Remembers the chosen scale and locks to it; the scale and the grind mode are
   changed from the on-screen settings gear.
 
@@ -40,7 +48,8 @@ mount for the Mignon is included.
   AMOLED with FocalTech FT3168 capacitive touch.
   <https://www.waveshare.com/wiki/ESP32-S3-Touch-AMOLED-1.64>
 - **Scale:** any supported Bluetooth scale — Acaia (Lunar, Pyxis, Lunar 2021,
-  Pearl…), BooKoo, or Timemore (Black Mirror family, model TES017).
+  Pearl…) or BooKoo. Scales are recognised by advertised name: `ACAIA`,
+  `PYXIS`, `UMBRA`, `LUNAR`, `PROCH` → Acaia; `BOOKOO` → BooKoo.
 - **Grinder:** a Eureka Mignon. The controller plugs into the grinder's
   original screen connector and drives the motor from a single active-high GPIO
   (see Wiring).
@@ -87,6 +96,14 @@ Build and flash (from the `firmware/` folder, the one containing
 ```bash
 pio run -t upload
 pio device monitor
+```
+
+Or use [`build.sh`](build.sh) from `esp32/` — it cleans, builds and uploads, and
+returns you to the directory you started in even if `pio` fails:
+
+```bash
+./build.sh              # clean + build + upload
+./build.sh -m           # …and open the serial monitor afterwards (also: --monitor, monitor)
 ```
 
 Notes that save time:
@@ -143,13 +160,17 @@ Pick a grind mode in the settings gear — **Pulse** (by weight, default),
 
 ## Tuning
 
-All knobs are at the top of [`firmware/src/config.h`](firmware/src/config.h):
+Most knobs are at the top of [`firmware/src/config.h`](firmware/src/config.h)
+(the one exception is the BooKoo power-off timer, noted at the end):
 
 - Dose (weight modes): `TARGET_DEFAULT_G`, `TARGET_MIN_G`, `TARGET_MAX_G`, `TARGET_STEP_G`.
 - Time (time mode): `TIME_DEFAULT_S`, `TIME_MIN_S`, `TIME_MAX_S`, `TIME_STEP_S` (0.1 s steps).
-- Pulse approach: `APPROACH_MARGIN_G` (coarse cut distance, default 0.9 g),
-  `PULSE_MS` (pulse length — raise it if your grinder's motor is slow to spin up
-  and pulses produce nothing), `TARGET_EPSILON_G`.
+- Pulse approach: `APPROACH_MARGIN_G` (coarse cut distance, default 0.9 g) and
+  the tapered burst — `PULSE_MS_PER_G` (ms of motor per gram still missing,
+  default 180), clamped between `PULSE_MIN_MS` (22, the final nudges) and
+  `PULSE_MS` (80, the longest burst). If you land slightly over, lower
+  `PULSE_MS_PER_G` or `PULSE_MIN_MS`; if it takes too many pulses or lands
+  under, raise them. `TARGET_EPSILON_G` (0.05 g) is how close counts as done.
 - Learn approach: `LEARN_STOP_OFFSET_G` (initial cut offset, default 0.8 g),
   `LEARN_RATE` (fraction of the error corrected each grind, default 0.5 —
   lower it for slower/steadier convergence), `LEARN_DEADBAND_G` (leave the
@@ -157,7 +178,21 @@ All knobs are at the top of [`firmware/src/config.h`](firmware/src/config.h):
   `LEARN_OFFSET_MIN_G`/`LEARN_OFFSET_MAX_G` clamps. The learned offset itself is
   stored in flash; a factory-reset of the scale doesn't touch it, but flashing
   fresh firmware that changes the NVS layout can.
-- Timing/safety: `PRE_GRIND_TARE_MS`, `MAX_GRIND_SECONDS`, `MAX_FINE_PULSES`.
+- Settle detection (between the coarse cut and each pulse, and before the learn
+  correction): `PULSE_SETTLE_MIN_MS` (minimum wait), `SETTLE_STABLE_DELTA_G` /
+  `SETTLE_STABLE_HOLD_MS` (how still, for how long, counts as settled), and
+  `SETTLE_MAX_MS` (give up waiting and use the reading anyway).
+- Timing/safety: `PRE_GRIND_TARE_MS`, `MAX_GRIND_SECONDS`, `MAX_FINE_PULSES`,
+  `DONE_HOLD_MS` (how long the green result stays up before returning to idle).
+- BooKoo idle power-off: `BOOKOO_AUTO_OFF_MIN` in
+  [`firmware/lib/scale/scale.cpp`](firmware/lib/scale/scale.cpp) — not in
+  `config.h`, because it is a scale-protocol value. BooKoo scales power
+  themselves down after an idle period, and no amount of BLE traffic prevents
+  it (the shutdown is a scale-side timer, not a link-activity one). On every
+  connection the firmware writes this value, in minutes, to the scale; the
+  protocol allows 5–30. Set it to `0` to leave whatever you configured in the
+  BooKoo app alone. Note that a non-zero value **overwrites** your app setting —
+  if the scale keeps reporting 30 min when you set 5, this is why.
 
 ## Enclosure / mount
 
@@ -176,6 +211,7 @@ brew-by-weight app, the shared `common/` scale code, and protocol docs under
 grind-bw/
 └── esp32/
     ├── README.md                              ← this file
+    ├── build.sh                               ← clean + build + upload (-m to monitor)
     ├── docs/
     │   ├── wiring-diagram.svg                 ← high-level schematic
     │   ├── ESP32-S3-wiring-diagram.png        ← detailed wiring
