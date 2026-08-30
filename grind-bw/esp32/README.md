@@ -267,13 +267,11 @@ grind-bw/
 
 ## Credits
 
-- Waveshare ESP32-S3-Touch-AMOLED-1.64 wiki.
-- [jaapp/smart-grind-by-weight](https://github.com/jaapp/smart-grind-by-weight)
-  — a grind-by-weight project on the same board; used to confirm the display
-  offsets, color order, and touch pins. (It uses a built-in HX711 load cell
+- Waveshare [ESP32-S3-Touch-AMOLED-1.64 wiki](https://docs.waveshare.com/ESP32-S3-Touch-AMOLED-1.64) - ESP32-S3-Touch-AMOLED-1.64 Documentation and Spec
+- [jaapp/smart-grind-by-weight](https://github.com/jaapp/smart-grind-by-weight) — a grind-by-weight project on the same board; used to confirm the display offsets, 
+  color order, and touch pins. (It uses a built-in HX711 load cell
   rather than a Bluetooth scale, so its weight path differs from this one.)
 
 ## Disclaimer
 
-Hobby project, provided as-is. You are responsible for the electrical and
-mechanical safety of wiring a microcontroller to a mains-powered grinder motor.
+Hobby project, provided as-is. You are responsible for the electrical and mechanical safety of wiring a microcontroller to a mains-powered grinder motor.
