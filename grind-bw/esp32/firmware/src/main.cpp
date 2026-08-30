@@ -24,12 +24,18 @@ static Preferences s_scalePrefs;
 static String s_lastSavedMac;
 
 static Vendor vendorFromStr(const String& s) {
-  if (s.equalsIgnoreCase("bookoo")) return Vendor::BOOKOO;
-  if (s.equalsIgnoreCase("acaia"))  return Vendor::ACAIA;
+  if (s.equalsIgnoreCase("bookoo"))   return Vendor::BOOKOO;
+  if (s.equalsIgnoreCase("acaia"))    return Vendor::ACAIA;
+  if (s.equalsIgnoreCase("timemore")) return Vendor::TIMEMORE;
   return Vendor::NONE;
 }
 static const char* vendorToStr(Vendor v) {
-  return v == Vendor::BOOKOO ? "bookoo" : (v == Vendor::ACAIA ? "acaia" : "");
+  switch (v) {
+    case Vendor::BOOKOO:   return "bookoo";
+    case Vendor::ACAIA:    return "acaia";
+    case Vendor::TIMEMORE: return "timemore";
+    default:               return "";
+  }
 }
 
 void setup() {

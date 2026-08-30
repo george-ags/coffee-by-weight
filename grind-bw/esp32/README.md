@@ -2,8 +2,10 @@
 
 Grind-by-weight controller for an espresso grinder, built on the
 **Waveshare ESP32-S3-Touch-AMOLED-1.64**. It connects to a Bluetooth coffee
-scale (Acaia or BooKoo), shows the live weight on the touch screen, lets you
-dial in a target dose, and runs the grinder until the scale reaches that target.
+scale (Acaia, BooKoo or Timemore), shows the live weight on the touch screen,
+lets you
+dial in a target dose, and runs the grinder until the scale reaches that
+target.
 It can also grind on a fixed timer instead, for when you'd rather not use a scale.
 
 Status: **in development** — the firmware works end to end: display, touch,
@@ -14,7 +16,7 @@ mount for the Mignon is included.
 
 - Three grind modes, selectable in the settings screen:
   - **Pulse** (by weight, default): connects to a Bluetooth scale (Acaia
-    Lunar/Pyxis/etc. or BooKoo) and grinds to a target dose in grams.
+    Lunar/Pyxis/etc., BooKoo, or Timemore) and grinds to a target dose in grams.
     Sequence: tare → 1 s settle → coarse cut to ~0.9 g before target → short
     motor pulses that creep up to the exact target. Each pulse is tapered to
     the remaining deficit, and the grind stops one pulse early when another
@@ -48,8 +50,17 @@ mount for the Mignon is included.
   AMOLED with FocalTech FT3168 capacitive touch.
   <https://www.waveshare.com/wiki/ESP32-S3-Touch-AMOLED-1.64>
 - **Scale:** any supported Bluetooth scale — Acaia (Lunar, Pyxis, Lunar 2021,
-  Pearl…) or BooKoo. Scales are recognised by advertised name: `ACAIA`,
-  `PYXIS`, `UMBRA`, `LUNAR`, `PROCH` → Acaia; `BOOKOO` → BooKoo.
+  Pearl…), BooKoo, or Timemore (Black Mirror family, model TES017). Scales are
+  recognised by advertised name: `ACAIA`, `PYXIS`, `UMBRA`, `LUNAR`, `PROCH` →
+  Acaia; `BOOKOO` → BooKoo; `TIMEMORE`, `TES017`, `BLACK MIRROR`,
+  `BLACKMIRROR` → Timemore. If yours advertises under some other name, add the
+  prefix to the matching list at the top of
+  [`firmware/lib/scale/scale.cpp`](firmware/lib/scale/scale.cpp).
+
+  > **Timemore is implemented but not yet bench-verified.** The driver follows
+  > the vendor spec, but the spec leaves two things unstated and both defaults
+  > are assumptions — see [Verifying a Timemore scale](#verifying-a-timemore-scale)
+  > before trusting a dose. Acaia and BooKoo are confirmed working.
 - **Grinder:** a Eureka Mignon. The controller plugs into the grinder's
   original screen connector and drives the motor from a single active-high GPIO
   (see Wiring).
@@ -88,7 +99,8 @@ It targets **Arduino-ESP32 core 3.x** via the community **pioarduino** platform 
 the CO5300 panel driver needs core 3.x, which the stock `espressif32` platform
 doesn't yet ship. Libraries: NimBLE-Arduino, LVGL 8.x, and GFX Library for
 Arduino; the scale driver is a self-contained local library in
-`firmware/lib/scale/`.
+`firmware/lib/scale/`, which holds all three protocols (Acaia's handshake +
+heartbeat, BooKoo's fixed command frames, Timemore's CRC-checked framing).
 
 Build and flash (from the `firmware/` folder, the one containing
 `platformio.ini`):
@@ -158,6 +170,36 @@ Pick a grind mode in the settings gear — **Pulse** (by weight, default),
 2. Tap the circle — the top counts down from the target time to zero, the motor
    runs for that long, then stops.
 
+### Verifying a Timemore scale
+
+The Timemore driver is written from the vendor spec
+(`doc/BT_Scales/Timemore/protocols.md`), but the spec does not state two things
+the firmware has to guess. Both defaults are assumptions — the same two that
+`common/scale_timemore.py` flags in its own header — and neither has been
+checked against real hardware. Both knobs sit at the top of the Timemore section
+in [`firmware/lib/scale/scale.cpp`](firmware/lib/scale/scale.cpp).
+
+1. **Weight scaling** (`TIMEMORE_WEIGHT_DIV`, default `100.0f` = 0.01 g per
+   count). §5.1 gives weight as a 4-byte Int32 with no unit — it states the unit
+   for flow rate but not for weight. Put a known load on the scale and compare
+   the controller readout against the scale's own display: if it reads 10× or
+   100× off, set the divisor to `10.0f` or `1000.0f`. **A wrong divisor means
+   the target is never reached and every grind runs to `MAX_GRIND_SECONDS`.**
+2. **CRC byte order** (`TIMEMORE_CRC_BIG_ENDIAN`, default `1` = MSB first). §3
+   names the checksum "CRC-16/IBM, poly 0x8005, init 0xFFFF" — the MODBUS
+   parameter set, whose native wire order is LSB first — while the same section
+   declares all multi-byte fields big-endian. Incoming frames are not
+   CRC-checked, so this affects only commands: **weight can stream perfectly
+   while the scale silently ignores every tare.** Tap the circle and watch
+   whether the scale zeroes. If it doesn't, set this to `0`.
+
+To see the raw frames, set `TIMEMORE_LOG_PACKETS` to the number of
+notifications you want hex-dumped on the serial monitor, then put it back to `0`
+— logging from the notify context floods the USB-CDC buffer.
+
+Once both are confirmed on hardware, drop the caveat from the Hardware section
+above.
+
 ## Tuning
 
 Most knobs are at the top of [`firmware/src/config.h`](firmware/src/config.h)
@@ -219,7 +261,7 @@ grind-bw/
     └── firmware/                              ← PlatformIO project (run pio here)
         ├── platformio.ini
         ├── include/lv_conf.h
-        ├── lib/scale/                         ← reusable Acaia/BooKoo BLE driver
+        ├── lib/scale/                         ← reusable Acaia/BooKoo/Timemore BLE driver
         └── src/                               ← config, grinder, ui, board, main
 ```
 
