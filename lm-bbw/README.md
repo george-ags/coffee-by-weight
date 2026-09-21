@@ -49,7 +49,9 @@ This project was inspired by and originally based on Marcus Sorensen's [Apollo](
 
 ## How it works
 
-The controller runs as a single main process (with background threads for the paddle watchdog, Bluetooth scanning, and the scale connection) plus a separate display process fed over a queue. It reads the paddle position, drives a relay that proxies the paddle circuit, streams weight from the scale, and decides when to cut the shot.
+The controller runs as a single main process (with background threads for the paddle watchdog, Bluetooth scanning, the scale connection, and a BLE command worker) plus a separate display process fed over a queue. It reads the paddle position, drives a relay that proxies the paddle circuit, streams weight from the scale, and decides when to cut the shot.
+
+Button presses arrive as gpiozero edge callbacks, which all share **one** dispatch thread — so a handler that blocks would kill every button at once. Nothing that can block runs there: BLE writes (the tare) are handed to the command worker, and every callback logs its entry and exit so a press that does nothing still leaves a trace.
 
 For a detailed breakdown of the processes, the shot lifecycle, the display state machine, and the configuration flow, see [**LM-BBW_Architecture.md**](../doc/lm-bbw/LM-BBW_Architecture.md).
 
@@ -180,6 +182,18 @@ sudo apt install -y git python3-pip python3-pandas python3-pil \
 sudo pip3 install simplepyble --break-system-packages
 ```
 
+The Pi has no battery-backed clock. Without `fake-hwclock` it boots believing it
+is still the moment of the previous shutdown, then jumps forward by however long
+it was switched off as soon as NTP answers — which makes every log from that
+boot read as if it happened hours ago. `deploy.sh --install` installs it for you;
+to do it by hand:
+
+```bash
+sudo apt install -y fake-hwclock
+sudo systemctl enable fake-hwclock
+sudo fake-hwclock save
+```
+
 ### 3. Install and start the service
 
 LM-BBW lives in the [coffee-by-weight](https://github.com/george-ags/coffee-by-weight) monorepo, which also contains the shared `common/` package (scale drivers, display drivers) and other apps. The `deploy.sh` script assembles everything into `/opt/lm-bbw`:
@@ -211,7 +225,7 @@ Settings are environment variables read at startup from `/etc/default/lm-bbw.env
 | `LOGLEVEL` | `INFO` | Logging verbosity (`DEBUG`, `INFO`, `WARNING`, …) |
 | `DISPLAY_ORIENTATION` | `landscape` | Screen orientation: `landscape` or `portrait` |
 | `DISPLAY_BRIGHTNESS` | `100` | Backlight brightness, percent |
-| `REFRESH_RATE` | `0.1` | Main-loop / sampling interval in seconds (~10 Hz) |
+| `REFRESH_RATE` | `0.1` | Main-loop interval in seconds: weight sampling, flow-rate calculation, graph buffer and the target cutoff. Does **not** set the on-screen timer rate (see `TIMER_TICK_SECONDS`) and has no effect on button responsiveness, which is interrupt-driven |
 | `GRAPH_HISTORY_SECONDS` | `60` | Seconds of flow history shown on the graph |
 | `GRAPH_MAX_VALUE` | `4` | Top of the graph's y-axis, in g/s |
 | `GRAPH_MAX_DENSITY_THRESHOLD` | `6` | Above this max value, only even gridlines are labelled |
@@ -221,8 +235,17 @@ Settings are environment variables read at startup from `/etc/default/lm-bbw.env
 | `IDLE_TIMEOUT` | `300` | Idle seconds before full sleep: disconnect the scale and turn the screen off |
 | `SLEEP_PAUSE` | `360` | Seconds to pause Bluetooth scanning after sleeping (lets the scale power off) |
 | `ACTIVITY_WEIGHT_THRESHOLD` | `0.3` | Weight change (g) that counts as user activity for the idle timers |
+| `OFF_TARGET_REJECT_GRAMS` | `1.0` | A finished shot this far off target (either way) is not saved and not used for overshoot learning; `0` accepts every shot |
+| `TARE_VERIFY_TIMEOUT` | `2.0` | Seconds to wait for the hardware tare to zero the scale before showing `TARE?` |
+| `TARE_CONFIRM_EPSILON` | `0.8` | Reading (g) at or below which the scale counts as zeroed when that window closes |
+| `TARE_STEP_MIN` | `3.0` | Sudden weight drop (g) taken as the hardware tare landing |
 | `MEMORY_A_NAME` / `B` / `C` | *(blank)* | Optional label shown instead of `TARGET A/B/C` (e.g. `Espresso`) |
-| `MEMORY_A_COLOR` / `B` / `C` | `#ff1303` / `#25a602` / `#376efa` | Accent color per memory bank |
+| `MEMORY_A_COLOR` / `B` / `C` | `#ff0000` / `#00ff00` / `#0000ff` | Accent color per memory bank (the shipped env file overrides all three) |
+| `TIMER_TICK_SECONDS` | `0.1` | How often the on-screen brew timer redraws during a shot, independent of `REFRESH_RATE`; `0` disables |
+| `LOOP_HEARTBEAT_SECONDS` | `60` | How often the main loop logs an `Alive:` line; `0` disables |
+| `BUTTON_SLOW_WARN_SECONDS` | `0.5` | Warn when a button handler takes longer than this (it delays every other button) |
+| `BLE_CMD_SLOW_WARN_SECONDS` | `2.0` | Warn when a BLE command (tare) takes longer than this |
+| `BLE_CMD_QUEUE_DEPTH` | `4` | BLE commands allowed to queue behind a stuck one before further ones are dropped |
 
 > Keep `READY_SCREEN_TIMEOUT` ≤ `IDLE_TIMEOUT` so the ready screen appears before the system fully sleeps.
 
@@ -304,6 +327,45 @@ sudo systemctl start lm-bbw
 
 Having several scales (or other BLE devices) powered on at once increases connect/scan churn; pinning one scale on the setup page makes startup more predictable.
 
+### Buttons stop responding (screen and scale still live)
+
+gpiozero dispatches every button's callback from one shared thread, so a single
+handler that blocks kills *all* the buttons at once. The tell-tale sign is that
+polled inputs keep working while callback-driven ones do not: the paddle still
+starts a shot and the scale-connect switch is still honoured, but tare, memory
+and the ± target buttons do nothing.
+
+Every callback now logs on the way in and on the way out, so the journal says
+exactly what happened:
+
+```bash
+sudo journalctl -u lm-bbw | grep button
+```
+
+* `button memory` with no matching `button memory done` → that handler hung, and
+  it is what took the other buttons down with it.
+* No `button …` line at all when you press → the edge never reached gpiozero
+  (wiring, or the pin was never claimed); restart the service.
+* `SLOW, this blocks every other button` → the handler returned, but took long
+  enough to delay everything else.
+
+BLE writes (the tare) run on a separate worker thread precisely so they can
+never be the handler that hangs; look for `BLE command 'tare' took …` warnings.
+
+### Reading a journal from a boot with no network
+
+Check for a clock jump before trusting any timestamp:
+
+```bash
+sudo journalctl | grep -E "System time advanced|Initial clock synchronization"
+```
+
+If `Initial clock synchronization` lands hours after the boot, every entry
+before it is stamped with the *previous* shutdown's time, and the boot is not
+where the timestamps say it is. The `Alive:` lines from the main loop are the
+easiest way to tell a genuinely idle stretch from a hung one — they appear every
+`LOOP_HEARTBEAT_SECONDS` regardless of what the clock says.
+
 ---
 
 ## Project notes
@@ -324,9 +386,13 @@ A high-level architecture overview — processes, threads, the shot lifecycle, t
 
 Owns the physical devices: defines the buttons, holds state (targets, memory banks, relay), runs the paddle watchdog, and maintains scale connectivity.
 
+Two rules hold the button path together. Every callback is wrapped by `_button_event()`, which logs entry and exit, flags handlers slower than `BUTTON_SLOW_WARN_SECONDS`, and swallows exceptions so a bad handler can't kill gpiozero's shared dispatch thread. And no callback may block: anything that talks to the scale goes through `_submit_ble()` onto the BLE command worker, whose queue is bounded so a stuck command is dropped with a warning rather than piling up.
+
 ### Display (`app/display.py`)
 
-Defines how the screen is drawn, updates the physical display, and saves images of finished shots. It runs in a separate process so rendering never blocks control or Bluetooth logic — the main loop pushes the latest data onto a queue, which the display process drains each refresh. Graph rendering uses simple lines (a deliberate choice after matplotlib proved too CPU-heavy and other libraries had their own drawbacks).
+Defines how the screen is drawn, updates the physical display, and saves images of finished shots. It runs in a separate process so rendering never blocks control or Bluetooth logic — the main loop pushes the latest data onto a queue, which the display process drains each refresh.
+
+The brew timer is drawn to 0.1 s, but frames only arrive at `REFRESH_RATE`. So while a shot is pouring the display ticks on its own: if no frame arrives within `TIMER_TICK_SECONDS` it redraws the last one with the elapsed time advanced from a monotonic anchor. Ticks are inert — a shallow copy with only the timer changed and the image-save flag cleared — so sampling, smoothing and the graph stay entirely on `REFRESH_RATE`. If a panel can't render that fast it simply draws as fast as it can (no busy-spin), and each shot logs one `Shot render:` line with the average and worst frame time so you can tell which case you are in. Graph rendering uses simple lines (a deliberate choice after matplotlib proved too CPU-heavy and other libraries had their own drawbacks).
 
 ### Main loop (`lm-bbw.py`)
 
@@ -334,7 +400,7 @@ Sets up the Display and ControlManager, then orchestrates data collection, the t
 
 ### Scale drivers (`common/scales.py`, `common/scale_acaia.py`, `common/scale_bookoo.py`, `common/scale_timemore.py`)
 
-These live in the repo's shared `common/` package (used by every app in coffee-by-weight, not just LM-BBW), so a driver fix lands everywhere with one commit. Each vendor has its own driver exposing a common interface (`connect`, `disconnect`, `tare`, and `mac` / `connected` / `weight` / `battery` / `units`). `scales.py` is the vendor-neutral layer: a combined scanner that tags each device with its brand, a factory, and a `Scale` wrapper that delegates to the right backend and can switch vendors in place. To add a new vendor, write a driver with the same interface and register its advertised-name prefix and constructor in `scales.py`. All BLE scans are serialized through a single lock in `common/ble.py` so the adapter is never scanned by two code paths at once.
+These live in the repo's shared `common/` package (used by every app in coffee-by-weight, not just LM-BBW), so a driver fix lands everywhere with one commit. Each vendor has its own driver exposing a common interface (`connect`, `disconnect`, `tare`, and `mac` / `connected` / `weight` / `battery` / `units`). `scales.py` is the vendor-neutral layer: a combined scanner that tags each device with its brand, a factory, and a `Scale` wrapper that delegates to the right backend and can switch vendors in place. To add a new vendor, write a driver with the same interface and register its advertised-name prefix and constructor in `scales.py`. Two conventions every driver follows: `connect()` mints a **fresh** stop event per connection session and passes it to the connect/heartbeat threads, so a thread left over from a previous session sees its own (already set) event and exits rather than adopting the new connection; and `_write_sync()` holds a per-scale write lock, because simplepyble calls into BlueZ and is not safe to enter concurrently. All BLE scans are serialized through a single lock in `common/ble.py` so the adapter is never scanned by two code paths at once.
 
 ---
 

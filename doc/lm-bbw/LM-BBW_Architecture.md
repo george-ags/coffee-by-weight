@@ -11,7 +11,7 @@ The system is one **main process** (with several background threads) plus a sepa
 ```mermaid
 flowchart TB
     subgraph HW["Hardware"]
-        SCALE["Acaia (Lunar/Pyxis/Umbra) or<br/>BooKoo (Ultra/Mini) — Bluetooth LE"]
+        SCALE["Acaia (Lunar/Pyxis/Umbra),<br/>BooKoo (Ultra/Mini) or<br/>Timemore (Black Mirror) — Bluetooth LE"]
         PADDLE["Micra paddle switch<br/>GPIO 20"]
         BTNS["Buttons: tare, memory, connect,<br/>target up / down (GPIO)"]
         RELAY["Relay -> Micra brew circuit<br/>GPIO 26"]
@@ -19,19 +19,20 @@ flowchart TB
     end
 
     subgraph MAIN["Main process — lm-bbw.py"]
-        LOOP["Main loop<br/>~10 Hz (REFRESH_RATE)"]
+        LOOP["Main loop<br/>REFRESH_RATE (0.3 s shipped)<br/>logs Alive: heartbeat"]
         OVER["Overshoot learner<br/>ThreadPoolExecutor (1 worker)"]
 
         subgraph CM["ControlManager — control.py"]
             WD["Watchdog thread<br/>paddle start / stop + safety latch"]
             SCAN["BLE scan thread<br/>find + classify scale"]
-            CB["gpiozero button<br/>callback threads"]
+            CB["gpiozero button callbacks<br/>ONE shared dispatch thread<br/>traced, never blocks"]
+            BLEW["BLE command worker<br/>tare off the callback thread"]
         end
 
         subgraph SC["Scale wrapper — scales.py"]
-            DRV["Active driver:<br/>scale_acaia / scale_bookoo"]
+            DRV["Active driver: scale_acaia /<br/>scale_bookoo / scale_timemore"]
             CONN["connect thread"]
-            HB["heartbeat / watchdog thread"]
+            HB["heartbeat / watchdog thread<br/>bound to one connection session"]
             NOTIF["BLE notify handler<br/>weight / battery"]
         end
 
@@ -39,7 +40,7 @@ flowchart TB
     end
 
     subgraph DISP["Display process — display.py"]
-        DLOOP["Render loop<br/>drain queue -> newest frame<br/>render-gated (skip idle dupes)"]
+        DLOOP["Render loop<br/>drain queue -> newest frame<br/>render-gated (skip idle dupes)<br/>self-ticks timer at TIMER_TICK_SECONDS"]
     end
 
     QUEUE(["DisplayData queue"])
@@ -51,6 +52,8 @@ flowchart TB
     PADDLE --> CB
     BTNS --> CB
     CB -->|"relay on/off"| RELAY
+    CB -->|"tare request"| BLEW
+    BLEW -->|"BLE write"| SCALE
     WD -->|"relay on/off"| RELAY
     NOTIF -.->|"latest weight"| LOOP
     SCAN -.->|"MAC handoff"| LOOP
@@ -62,10 +65,12 @@ flowchart TB
 
 **Thread/process legend**
 
-- **Main loop** orchestrates everything at `REFRESH_RATE` (~0.1 s): checks sleep, keeps the scale connected, evaluates the target cutoff, and pushes a `DisplayData` snapshot onto the queue.
+- **Main loop** orchestrates everything at `REFRESH_RATE` (code default 0.1 s; the shipped env file uses 0.3 s): checks sleep, keeps the scale connected, evaluates the target cutoff, and pushes a `DisplayData` snapshot onto the queue. Every `LOOP_HEARTBEAT_SECONDS` it logs an `Alive:` line with the achieved loop rate, so a stalled loop is distinguishable from a quiet machine.
 - **Watchdog thread** polls the paddle to start/stop shots and enforces the debounce + release latch (the emergency stop path).
 - **BLE scan thread** searches for a supported scale, classifies it by vendor, and hands it to the main thread to connect. Every BLE scan (discovery, the web scan, and each driver's connect-scan) is serialized through one lock in `common/ble.py` so the adapter is never scanned by two paths at once.
-- **Scale wrapper** (`scales.py`) holds the active vendor driver (`scale_acaia` or `scale_bookoo`) behind a common interface; the driver's connect / heartbeat / notify threads update `weight`/`battery` asynchronously.
+- **Button callbacks** all arrive on **one** gpiozero dispatch thread, so a handler that blocks takes every button down with it while polled inputs (the paddle watchdog, the scale-connect switch) keep working. Each callback is wrapped to log its entry and exit, flag slow handlers, and contain exceptions.
+- **BLE command worker** runs anything that writes to the scale (currently the tare), because a `write_command()` can block inside BlueZ for an unbounded time and must never do so on the callback thread. Its queue is bounded: if a command is stuck, further ones are dropped with a warning instead of queueing.
+- **Scale wrapper** (`scales.py`) holds the active vendor driver (`scale_acaia`, `scale_bookoo` or `scale_timemore`) behind a common interface; the driver's connect / heartbeat / notify threads update `weight`/`battery` asynchronously. Each connection is a **session**: `connect()` mints a fresh stop event and passes it to those threads, so a thread left over from a previous session exits instead of adopting the new connection, and all writes are serialized by a per-scale lock.
 - **Display process** is fully separate; it drains the queue to the latest frame and only redraws when the picture actually changes.
 
 ---
@@ -130,6 +135,8 @@ stateDiagram-v2
 - **Logo** is the LM lion screen (also the "ready" state). After a shot it returns here once `READY_SCREEN_TIMEOUT` (default 180 s) of inactivity passes — and it is **latched**: weight wiggle or button presses won't revert it; only the next shot start does.
 - **DripOut** keeps the graph and weight updating for `DRIP_OUT_WINDOW` (default 3.5 s); the cup/avg summary line is hidden until the window closes (but it is force-shown on the saved snapshot).
 - **Sleep** = screen off + scale disconnected, after `IDLE_TIMEOUT` (default 300 s, longer than the ready-screen timeout). Reconnect wakes to a clean Logo screen.
+- **LiveShot** redraws on every frame from the main loop, and additionally self-ticks every `TIMER_TICK_SECONDS` (default 0.1 s) so the brew timer advances smoothly even though frames arrive at the slower `REFRESH_RATE`. A tick reuses the last frame with only the elapsed time advanced, so nothing else on screen — graph, weight, smoothing — is affected. Ticking stops when the paddle opens, and gives up (with a warning) if no real frame arrives for 2 s. All display timing uses `time.monotonic()`, so an NTP clock step can't expire the drip-out window or freeze the warning flash mid-shot.
+- Each finished shot logs one `Shot render:` line with the frame count, average and worst render time against the tick budget — the measurement that says whether this hardware can actually sustain the configured tick rate.
 
 ---
 
@@ -162,6 +169,7 @@ Paths are relative to the `coffee-by-weight` repo root. `common/` is the shared 
 | `common/scales.py` | Vendor-neutral layer: combined scan + classification, factory, and the `Scale` wrapper that delegates to a backend |
 | `common/scale_acaia.py` | `AcaiaScale`: BLE scan/connect/heartbeat, Acaia protocol decode |
 | `common/scale_bookoo.py` | `BookooScale`: BLE connect, BooKoo Ultra/Mini protocol decode |
+| `common/scale_timemore.py` | `TimemoreScale`: BLE connect, Timemore Black Mirror (TES017) protocol decode |
 | `common/ble.py` | Single lock serializing all BLE adapter scans |
 | `lm-bbw/app/display.py` | Display process: frame rendering, graph, screen states, image saving |
 | `lm-bbw/app/webserver.py` | Shot-history gallery + `/config` editor + `/scan` scale setup |

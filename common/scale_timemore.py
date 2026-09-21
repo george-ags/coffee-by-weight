@@ -319,9 +319,15 @@ class TimemoreScale(object):
 
         self._buffer = bytearray()
 
+        # _stop_event is REPLACED (not cleared) on every connect: it identifies
+        # one connection session, so threads left over from an older session hold
+        # the old (set) event and exit instead of adopting the new connection.
         self._connect_thread = None
         self._watchdog_thread = None
         self._stop_event = threading.Event()
+        # Serializes every write_command(): simplepyble calls into BlueZ, which
+        # is not safe to enter concurrently from several threads.
+        self._write_lock = threading.Lock()
 
         # Connect-retry log throttling (see SEARCH_REMINDER_INTERVAL). Counts
         # consecutive failed scans since the scale was last connected; reset to 0
@@ -337,8 +343,12 @@ class TimemoreScale(object):
             return
         if self._connect_thread and self._connect_thread.is_alive():
             return
-        self._stop_event.clear()
-        self._connect_thread = threading.Thread(target=self._connect_sync, daemon=True)
+        # New session token; anything still running from the previous one keeps
+        # the old (set) event and stops.
+        session = threading.Event()
+        self._stop_event = session
+        self._connect_thread = threading.Thread(
+            target=self._connect_sync, args=(session,), daemon=True)
         self._connect_thread.start()
         # First attempt of an episode logs normally; quiet retries drop to DEBUG.
         if self._search_miss_count == 0:
@@ -346,7 +356,12 @@ class TimemoreScale(object):
         else:
             logging.debug("Starting Timemore Connection Thread (SimplePyBLE)... (retry)")
 
-    def _connect_sync(self):
+    def _connect_sync(self, stop_event: threading.Event):
+        """
+        stop_event identifies this connection session (see connect()); it is
+        checked before claiming the peripheral so a session abandoned mid-scan
+        does not go on to connect.
+        """
         try:
             time.sleep(0.5)
             adapters = simplepyble.Adapter.get_adapters()
@@ -392,6 +407,10 @@ class TimemoreScale(object):
                                   % (self.mac, self._search_miss_count))
                 return
 
+            if stop_event.is_set():
+                logging.info("Connection session cancelled during scan - not connecting.")
+                return
+
             self._peripheral = target
             logging.info(f"Connecting to Timemore {self.mac}...")
             self._peripheral.connect()
@@ -433,7 +452,8 @@ class TimemoreScale(object):
             self._write_sync(read_battery())
 
             # Start light keep-alive watchdog.
-            self._watchdog_thread = threading.Thread(target=self._watchdog_loop, daemon=True)
+            self._watchdog_thread = threading.Thread(
+                target=self._watchdog_loop, args=(stop_event,), daemon=True)
             self._watchdog_thread.start()
 
         except Exception as e:
@@ -460,15 +480,15 @@ class TimemoreScale(object):
             logging.error(f"Service Discovery Error: {e}")
         return False
 
-    def _watchdog_loop(self):
+    def _watchdog_loop(self, stop_event: threading.Event):
         """
         Timemore needs no heartbeat, but if the peripheral handle reports a lost
         connection we surface it the same way the other drivers do.
         """
-        while self.connected and not self._stop_event.is_set():
+        while self.connected and not stop_event.is_set():
             try:
                 time.sleep(2.0)
-                if not self.connected:
+                if not self.connected or stop_event.is_set():
                     break
                 if self._peripheral is not None and not self._peripheral.is_connected():
                     logging.error("Timemore reports disconnected. Dropping.")
@@ -513,13 +533,17 @@ class TimemoreScale(object):
     # ---- commands ----
 
     def _write_sync(self, data) -> bool:
-        if self.connected and self._peripheral and self._write_uuid:
-            try:
-                self._peripheral.write_command(self._service_uuid, self._write_uuid, bytes(data))
-                return True
-            except Exception as e:
-                logging.error(f"Timemore Write CMD failed: {e}")
-                return False
+        # One writer at a time (see _write_lock). Callers must not be on a GPIO
+        # callback thread -- ControlManager routes tares through its BLE worker.
+        with self._write_lock:
+            peripheral = self._peripheral
+            if self.connected and peripheral and self._write_uuid:
+                try:
+                    peripheral.write_command(self._service_uuid, self._write_uuid, bytes(data))
+                    return True
+                except Exception as e:
+                    logging.error(f"Timemore Write CMD failed: {e}")
+                    return False
         return False
 
     def tare(self):

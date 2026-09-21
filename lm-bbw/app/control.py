@@ -1,6 +1,7 @@
 import math
 import logging
 import pickle
+import queue
 import time
 import copy
 import threading
@@ -57,6 +58,34 @@ try:
     DRIP_OUT_CAPTURE_SECONDS = float(os.environ.get('DRIP_OUT_WINDOW', '3.5')) + 0.5
 except (TypeError, ValueError):
     DRIP_OUT_CAPTURE_SECONDS = 4.0
+
+# --- GPIO callback instrumentation / BLE command offloading ---
+# gpiozero dispatches EVERY pin's edge callbacks from a single shared background
+# thread. One callback that blocks therefore kills every button at once, while
+# polled reads (the paddle watchdog, the scale-connect switch) keep working --
+# which is exactly the failure seen on 2026-09-21: the memory and tare buttons
+# were dead while the connect switch was still honoured. Two defences:
+#
+#   1. Every callback announces itself on the way in and on the way out
+#      (_button_event), so a press that does nothing leaves a trace and a
+#      callback that hangs is obvious from the missing "done" line.
+#   2. Nothing that can block runs on that thread. BLE writes go to a dedicated
+#      worker (_submit_ble), so a wedged write can never take the buttons down
+#      with it.
+try:
+    BUTTON_SLOW_WARN_SECONDS = float(os.environ.get('BUTTON_SLOW_WARN_SECONDS', '0.5'))
+except (TypeError, ValueError):
+    BUTTON_SLOW_WARN_SECONDS = 0.5
+try:
+    BLE_CMD_SLOW_WARN_SECONDS = float(os.environ.get('BLE_CMD_SLOW_WARN_SECONDS', '2.0'))
+except (TypeError, ValueError):
+    BLE_CMD_SLOW_WARN_SECONDS = 2.0
+# Bound on queued BLE commands. Small on purpose: if the worker is stuck there
+# is no point piling up tares, and the drop warning names the problem.
+try:
+    BLE_CMD_QUEUE_DEPTH = int(os.environ.get('BLE_CMD_QUEUE_DEPTH', '4'))
+except (TypeError, ValueError):
+    BLE_CMD_QUEUE_DEPTH = 4
 
 
 class TargetMemory:
@@ -123,6 +152,11 @@ class ControlManager:
         # Tare callback, wired up later via add_tare_handler().
         self._tare_callback: Optional[Callable] = None
 
+        # Queue of BLE commands to run off the GPIO callback thread. Must exist
+        # before any Button is constructed, since a callback can fire the
+        # instant the pin is claimed. See _submit_ble / _ble_cmd_loop.
+        self._ble_queue: "queue.Queue" = queue.Queue(maxsize=BLE_CMD_QUEUE_DEPTH)
+
         # Reads the scale's current raw weight; wired via add_weight_reader().
         self._weight_reader: Optional[Callable] = None
         # Software tare baseline: the platter load captured at the instant a
@@ -187,27 +221,36 @@ class ControlManager:
         self.relay = DigitalOutputDevice(ControlManager.RELAY_GPIO)
 
         # TARGET BUTTONS
+        # The held callbacks repeat for as long as the button is down, so they
+        # trace at DEBUG; everything else traces at INFO (see _button_event).
         self.tgt_inc_button = Button(ControlManager.TGT_INC_GPIO, hold_time=0.5, hold_repeat=True, pull_up=True, bounce_time=0.02)
-        self.tgt_inc_button.when_released = lambda: (self._activity_detected(), self._change_target(0.1))
-        self.tgt_inc_button.when_held = lambda: (self._activity_detected(), self._change_target_held(1))
+        self.tgt_inc_button.when_released = self._button_event(
+            "target+ released", lambda: (self._activity_detected(), self._change_target(0.1)))
+        self.tgt_inc_button.when_held = self._button_event(
+            "target+ held", lambda: (self._activity_detected(), self._change_target_held(1)), level=logging.DEBUG)
 
         self.tgt_dec_button = Button(ControlManager.TGT_DEC_GPIO, hold_time=0.5, hold_repeat=True, pull_up=True, bounce_time=0.02)
-        self.tgt_dec_button.when_released = lambda: (self._activity_detected(), self._change_target(-0.1))
-        self.tgt_dec_button.when_held = lambda: (self._activity_detected(), self._change_target_held(-1))
+        self.tgt_dec_button.when_released = self._button_event(
+            "target- released", lambda: (self._activity_detected(), self._change_target(-0.1)))
+        self.tgt_dec_button.when_held = self._button_event(
+            "target- held", lambda: (self._activity_detected(), self._change_target_held(-1)), level=logging.DEBUG)
 
         # PADDLE SWITCH
         self.paddle_switch = Button(ControlManager.PADDLE_GPIO, pull_up=True, bounce_time=0.05)
-        self.paddle_switch.when_pressed = lambda: (self._activity_detected(), self._start_shot())
+        self.paddle_switch.when_pressed = self._button_event(
+            "paddle closed", lambda: (self._activity_detected(), self._start_shot()))
 
         # --- TARE BUTTON (5s long-press restarts the service) ---
         self.tare_button = Button(ControlManager.TARE_GPIO, pull_up=True, hold_time=5.0)
-        self.tare_button.when_held = lambda: self._restart_service()
+        self.tare_button.when_held = self._button_event("tare held 5s", self._restart_service)
 
         self.memory_button = Button(ControlManager.MEM_GPIO, pull_up=True, bounce_time=0.05)
-        self.memory_button.when_pressed = lambda: (self._activity_detected(), self._rotate_memory())
+        self.memory_button.when_pressed = self._button_event(
+            "memory", lambda: (self._activity_detected(), self._rotate_memory()))
 
         self.scale_connect_button = Button(ControlManager.SCALE_CONNECT_GPIO, pull_up=True)
-        self.scale_connect_button.when_pressed = lambda: self._activity_detected()
+        self.scale_connect_button.when_pressed = self._button_event(
+            "scale-connect switch ON", self._activity_detected)
 
         self.tgt_button_was_held = False
 
@@ -219,6 +262,72 @@ class ControlManager:
         self.scan_thread = threading.Thread(target=self._bg_scan_loop)
         self.scan_thread.daemon = True
         self.scan_thread.start()
+
+        self.ble_cmd_thread = threading.Thread(target=self._ble_cmd_loop)
+        self.ble_cmd_thread.daemon = True
+        self.ble_cmd_thread.start()
+
+    # --- GPIO CALLBACK PLUMBING ---
+    def _button_event(self, name: str, action: Callable, level=logging.INFO) -> Callable:
+        """
+        Wrap a GPIO edge callback so that it traces itself and can never wedge
+        gpiozero's shared callback thread.
+
+        Logs "button X" on entry and "button X done" on exit. A press that does
+        nothing then still leaves a trace, and a callback that never returns is
+        identifiable by the entry line with no matching exit -- the one clue
+        that was missing when every button went dead on 2026-09-21. Handlers
+        slower than BUTTON_SLOW_WARN_SECONDS are flagged, because on that shared
+        thread one slow handler delays every other button. Exceptions are
+        swallowed (after logging) so a bad handler can't kill the dispatcher.
+        """
+        def handler():
+            logging.log(level, "button %s" % name)
+            start = timer()
+            try:
+                action()
+            except Exception as ex:
+                logging.exception("button %s: handler raised: %s" % (name, ex))
+            elapsed = timer() - start
+            if elapsed >= BUTTON_SLOW_WARN_SECONDS:
+                logging.warning("button %s done in %.2fs - SLOW, this blocks every other button"
+                                % (name, elapsed))
+            else:
+                logging.log(level, "button %s done (%.3fs)" % (name, elapsed))
+        return handler
+
+    def _submit_ble(self, name: str, command: Callable):
+        """
+        Hand a BLE command to the worker thread.
+
+        Callers are GPIO callbacks and the main loop; a BLE write can block for
+        an unbounded time inside BlueZ, so neither may run one inline. If the
+        worker is already stuck the queue fills and we drop the command with a
+        warning rather than growing a backlog nobody wants executed later.
+        """
+        try:
+            self._ble_queue.put_nowait((name, command))
+        except queue.Full:
+            logging.warning("BLE command queue full - dropping '%s' (an earlier command is stuck)"
+                            % name)
+
+    def _ble_cmd_loop(self):
+        logging.info("BLE Command Worker Started")
+        while self.running:
+            try:
+                name, command = self._ble_queue.get(timeout=1.0)
+            except queue.Empty:
+                continue
+            start = timer()
+            try:
+                command()
+            except Exception as ex:
+                logging.error("BLE command '%s' failed: %s" % (name, str(ex)))
+            elapsed = timer() - start
+            if elapsed >= BLE_CMD_SLOW_WARN_SECONDS:
+                logging.warning("BLE command '%s' took %.2fs" % (name, elapsed))
+            else:
+                logging.debug("BLE command '%s' done (%.3fs)" % (name, elapsed))
 
     def _restart_service(self):
         logging.warning("Tare button held for 5 seconds! Force restarting service...")
@@ -434,11 +543,16 @@ class ControlManager:
     def add_tare_handler(self, callback: Callable):
         # Store the callback and wire the physical button to it (with activity).
         self._tare_callback = callback
-        self.tare_button.when_pressed = lambda: (self._activity_detected(), self._do_tare())
+        self.tare_button.when_pressed = self._button_event(
+            "tare", lambda: (self._activity_detected(), self._do_tare()))
 
     def _do_tare(self):
+        # The tare is a BLE write, so it runs on the worker rather than on the
+        # caller's thread: _do_tare() is reached both from the tare button and
+        # from _start_shot() (paddle callback), and both of those sit on
+        # gpiozero's shared dispatch thread. See _submit_ble.
         if self._tare_callback is not None:
-            self._tare_callback()
+            self._submit_ble("tare", self._tare_callback)
 
     def add_weight_reader(self, callback: Callable):
         """Wire a zero-arg callable that returns the scale's current raw weight."""

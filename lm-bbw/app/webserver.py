@@ -35,12 +35,24 @@ KNOWN_CONFIG_KEYS = {
     'OFF_TARGET_REJECT_GRAMS': '1.0',
     'DISPLAY_BRIGHTNESS': '100',
     'DRIP_OUT_WINDOW': '3.5',
+    'TIMER_TICK_SECONDS': '0.1',
+    # Tare verification (control.py)
+    'TARE_VERIFY_TIMEOUT': '2.0',
+    'TARE_CONFIRM_EPSILON': '0.8',
+    'TARE_STEP_MIN': '3.0',
+    # Diagnostics: main-loop proof-of-life, and the thresholds that flag a
+    # button handler or BLE command slow enough to block the shared GPIO
+    # callback thread. See the Troubleshooting section of the README.
+    'LOOP_HEARTBEAT_SECONDS': '60',
+    'BUTTON_SLOW_WARN_SECONDS': '0.5',
+    'BLE_CMD_SLOW_WARN_SECONDS': '2.0',
+    'BLE_CMD_QUEUE_DEPTH': '4',
     'MEMORY_A_NAME': '',
     'MEMORY_B_NAME': '',
     'MEMORY_C_NAME': '',
-    'MEMORY_A_COLOR': '#ff1303',
-    'MEMORY_B_COLOR': '#25a602',
-    'MEMORY_C_COLOR': '#376efa'
+    'MEMORY_A_COLOR': '#ff0000',
+    'MEMORY_B_COLOR': '#00ff00',
+    'MEMORY_C_COLOR': '#0000ff'
 }
 
 class GalleryHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):

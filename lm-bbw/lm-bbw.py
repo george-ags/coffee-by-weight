@@ -31,6 +31,16 @@ try:
 except (TypeError, ValueError):
     OFF_TARGET_REJECT_GRAMS = 1.0
 
+# How often the main loop states that it is alive, in seconds (0 disables).
+# Idle steady state is otherwise completely silent in the journal, so a hung
+# loop and a quiet machine look identical after the fact -- which is exactly
+# what made the 2026-09-21 incident hard to read. The line also carries the
+# achieved loop rate, so a loop that is merely crawling is visible too.
+try:
+    LOOP_HEARTBEAT_SECONDS = float(os.environ.get('LOOP_HEARTBEAT_SECONDS', '60'))
+except (TypeError, ValueError):
+    LOOP_HEARTBEAT_SECONDS = 60.0
+
 stop = False
 overshoot_update_executor = ThreadPoolExecutor(max_workers=1)
 
@@ -188,7 +198,12 @@ def main():
     last_relay_state = False
     shot_started_with_scale = False
 
+    hb_last = timer()
+    hb_iterations = 0
+
     while not stop:
+        hb_iterations += 1
+
         # Check Auto-Sleep Status
         mgr.check_auto_sleep(scale)
         
@@ -235,7 +250,21 @@ def main():
             # Reset timing variables on disconnect
             last_sample_time = None
             last_weight = None
-            
+
+        # Proof of life. Prints even while asleep or disconnected, so a gap in
+        # these lines means the loop stopped, not that nothing happened.
+        if LOOP_HEARTBEAT_SECONDS > 0:
+            now = timer()
+            hb_elapsed = now - hb_last
+            if hb_elapsed >= LOOP_HEARTBEAT_SECONDS:
+                state = "brewing" if relay_is_on else ("asleep" if mgr.is_sleeping else "idle")
+                scale_state = ("connected (%.1fg)" % scale.weight) if is_connected else "disconnected"
+                logging.info("Alive: %.1f loops/s, scale %s, bank %s, %s"
+                             % (hb_iterations / hb_elapsed, scale_state,
+                                mgr.current_memory().name, state))
+                hb_last = now
+                hb_iterations = 0
+
         time.sleep(refreshRate)
         
     if scale.connected:

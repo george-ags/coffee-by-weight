@@ -244,11 +244,21 @@ class AcaiaScale(object):
         self._char_uuid = None
         self.isPyxisStyle = False
         
-        # Threading for non-blocking operations
+        # Threading for non-blocking operations.
+        # _stop_event is REPLACED (not cleared) on every connect: it identifies
+        # one connection session. Threads from an older session hold the old
+        # event, which disconnect() left set, so they exit instead of adopting
+        # the new connection. Clearing a shared event let a heartbeat thread
+        # that was mid-sleep() across a disconnect/reconnect survive, leaving
+        # two heartbeat threads writing to the same peripheral.
         self._connect_thread = None
         self._heartbeat_thread = None
         self._stop_event = threading.Event()
-        
+        # Serializes every write_command(): simplepyble calls into BlueZ, which
+        # is not safe to enter concurrently from the heartbeat thread, the tare
+        # worker and the handshake at once.
+        self._write_lock = threading.Lock()
+
         self.packet = bytearray()
 
         # Connect-retry log throttling (see SEARCH_REMINDER_INTERVAL). Counts
@@ -268,8 +278,12 @@ class AcaiaScale(object):
         if self._connect_thread and self._connect_thread.is_alive():
             return
 
-        self._stop_event.clear()
-        self._connect_thread = threading.Thread(target=self._connect_sync, daemon=True)
+        # New session token; anything still running from the previous one keeps
+        # the old (set) event and stops.
+        session = threading.Event()
+        self._stop_event = session
+        self._connect_thread = threading.Thread(
+            target=self._connect_sync, args=(session,), daemon=True)
         self._connect_thread.start()
         # First attempt of an episode logs normally; quiet retries drop to DEBUG.
         if self._search_miss_count == 0:
@@ -277,10 +291,14 @@ class AcaiaScale(object):
         else:
             logging.debug("Starting Connection Thread (SimplePyBLE)... (retry)")
 
-    def _connect_sync(self):
+    def _connect_sync(self, stop_event: threading.Event):
         """
         Synchronous connection logic (running in background thread).
         Includes retry logic for busy BlueZ adapters.
+
+        stop_event identifies this connection session (see connect()); it is
+        checked at each step so a session abandoned mid-scan -- the scale-connect
+        switch flipped off, say -- does not go on to claim the peripheral.
         """
         try:
             time.sleep(0.5)
@@ -331,10 +349,14 @@ class AcaiaScale(object):
                                   % (self.mac, self._search_miss_count))
                 return
 
+            if stop_event.is_set():
+                logging.info("Connection session cancelled during scan - not connecting.")
+                return
+
             self._peripheral = target
             logging.info(f"Connecting to {self.mac}...")
             self._peripheral.connect()
-            
+
             if self._peripheral.is_connected():
                 logging.info(f"Connected to {self.mac}")
                 self.connected = True
@@ -358,9 +380,10 @@ class AcaiaScale(object):
 
                     # Handshake
                     self._perform_handshake()
-                    
-                    # Start Heartbeat Loop
-                    self._heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
+
+                    # Start Heartbeat Loop (bound to THIS session's stop event)
+                    self._heartbeat_thread = threading.Thread(
+                        target=self._heartbeat_loop, args=(stop_event,), daemon=True)
                     self._heartbeat_thread.start()
                 else:
                     logging.error("Failed to find Acaia Service/Char UUIDs")
@@ -407,22 +430,26 @@ class AcaiaScale(object):
         self._write_sync(encodeHeartbeat())
         logging.info("Handshake Sent.")
 
-    def _heartbeat_loop(self):
+    def _heartbeat_loop(self, stop_event: threading.Event):
         count = 0
         missed_packets = 0
-        
+
         # Send one immediate heartbeat
         self._write_sync(encodeHeartbeat())
-        
-        while self.connected and not self._stop_event.is_set():
+
+        # stop_event belongs to the connection session this thread was started
+        # for. Re-checked after every sleep so a disconnect that happens mid-
+        # sleep ends this thread even if a new session has meanwhile set
+        # self.connected back to True.
+        while self.connected and not stop_event.is_set():
             try:
                 time.sleep(2.0)
-                
-                if not self.connected: break
-                
+
+                if not self.connected or stop_event.is_set(): break
+
                 # --- FIX: Trust 'Write' success over 'is_connected' flag ---
                 success = self._write_sync(encodeHeartbeat())
-                
+
                 if success:
                     missed_packets = 0 # Reset counter on success
                 else:
@@ -458,13 +485,17 @@ class AcaiaScale(object):
                 if msg.msgType == 5: self.weight = msg.value
 
     def _write_sync(self, data):
-        if self.connected and self._peripheral:
-            try:
-                self._peripheral.write_command(self._service_uuid, self._char_uuid, bytes(data))
-                return True # Success
-            except Exception as e:
-                logging.error(f"Write CMD failed: {e}")
-                return False # Failed
+        # One writer at a time (see _write_lock). Callers must not be on a GPIO
+        # callback thread -- ControlManager routes tares through its BLE worker.
+        with self._write_lock:
+            peripheral = self._peripheral
+            if self.connected and peripheral:
+                try:
+                    peripheral.write_command(self._service_uuid, self._char_uuid, bytes(data))
+                    return True # Success
+                except Exception as e:
+                    logging.error(f"Write CMD failed: {e}")
+                    return False # Failed
         return False
 
     def disconnect(self):

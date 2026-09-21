@@ -1,3 +1,4 @@
+import copy
 import logging
 import math
 import os
@@ -52,6 +53,22 @@ Drip_Out_Window = float(os.environ.get('DRIP_OUT_WINDOW', '3.5'))
 
 # --- SCREEN CONFIGURATION ---
 display_brightness = int(os.environ.get('DISPLAY_BRIGHTNESS', '100'))
+
+# --- BREW TIMER TICK ---
+# The brew timer is drawn to 0.1s, but frames only arrive at the control loop's
+# REFRESH_RATE, so at REFRESH_RATE=0.3 the tenths digit jumps in steps of 3.
+# While a shot is pouring the display therefore ticks on its own: if no new
+# frame arrives within TIMER_TICK_SECONDS it redraws the last one with the
+# elapsed time extrapolated from a monotonic anchor. This is purely a display
+# concern -- sampling, flow smoothing and the graph buffer all stay on
+# REFRESH_RATE and are untouched.
+try:
+    Timer_Tick_Seconds = float(os.environ.get('TIMER_TICK_SECONDS', '0.1'))
+except (TypeError, ValueError):
+    Timer_Tick_Seconds = 0.1
+# Stop self-ticking if the producer goes quiet for this long, so a dead control
+# process can't keep the screen awake forever on a stale frame.
+TICK_GIVE_UP_SECONDS = 2.0
 
 # --- MEMORY BANK DISPLAY NAMES ---
 # Optional human-readable names per bank. If set, the header shows the name
@@ -586,9 +603,43 @@ class Display:
 
         screen_is_on = False
 
+        # --- BREW TIMER TICK STATE (see Timer_Tick_Seconds) ---
+        # tick_frame holds a synthesized frame to process instead of blocking on
+        # the queue. The anchor pins the last real frame's elapsed time to a
+        # monotonic reading so ticks advance the timer by true wall time rather
+        # than by a fixed increment.
+        tick_frame = None
+        last_good_data = None
+        next_tick_mono = 0.0
+        tick_anchor_mono = 0.0
+        tick_anchor_elapsed = 0.0
+        ticking = False
+        last_real_frame_mono = time.monotonic()
+        render_count = 0
+        render_total = 0.0
+        render_max = 0.0
+
         while True:
             try:
-                data = self.data_queue.get(timeout=2.0)
+                is_tick = tick_frame is not None
+                if is_tick:
+                    data, tick_frame = tick_frame, None
+                else:
+                    # Only poll fast while a shot is actually pouring; idle stays
+                    # on the 2s timeout that drives the screen-sleep path below.
+                    # Waiting until the next tick BOUNDARY (rather than a fixed
+                    # sleep) keeps the period at Timer_Tick_Seconds instead of
+                    # tick + render time. Resyncing here -- after the previous
+                    # render has finished -- means a panel slower than the tick
+                    # simply draws as fast as it can, and never busy-spins.
+                    if ticking:
+                        now_mono = time.monotonic()
+                        if next_tick_mono <= now_mono:
+                            next_tick_mono = now_mono + Timer_Tick_Seconds
+                        wait = next_tick_mono - now_mono
+                    else:
+                        wait = 2.0
+                    data = self.data_queue.get(timeout=wait)
 
                 # --- DRAIN STALE FRAMES ---
                 # The producer pushes at the main-loop rate (~10 Hz). If a render
@@ -608,6 +659,19 @@ class Display:
                         break
                 data.save_image = pending_save
                 # --------------------------
+
+                # --- TIMER TICK ANCHOR ---
+                # Done after the drain so the anchor pins the frame we actually
+                # render. The control loop's elapsed time is authoritative;
+                # ticks only fill the gaps between frames.
+                if not is_tick:
+                    last_good_data = data
+                    last_real_frame_mono = time.monotonic()
+                    if data.paddle_on:
+                        tick_anchor_mono = last_real_frame_mono
+                        tick_anchor_elapsed = data.shot_time_elapsed
+                    ticking = bool(data.paddle_on) and Timer_Tick_Seconds > 0
+                # -------------------------
 
                 # Wake Logic
                 just_woke = False
@@ -646,7 +710,25 @@ class Display:
                 
                 # 2. Latch Average and start drip-out timer if shot stops (ON -> OFF)
                 if not data.paddle_on and self.last_paddle_state:
-                    self.shot_stop_time = time.time()
+                    # One line per shot: says whether this hardware can actually
+                    # sustain the timer tick rate. avg well under the tick budget
+                    # means the timer really is updating every tick; avg above it
+                    # means the display is render-bound and the timer advances as
+                    # fast as the panel allows, no faster.
+                    if render_count:
+                        logging.info("Shot render: %d frames, avg %.0fms, max %.0fms "
+                                     "(tick budget %.0fms)"
+                                     % (render_count, 1000.0 * render_total / render_count,
+                                        1000.0 * render_max, 1000.0 * Timer_Tick_Seconds))
+                    render_count = 0
+                    render_total = 0.0
+                    render_max = 0.0
+
+                    # monotonic, not wall clock: the Pi has no RTC, so the
+                    # system clock can step by hours the moment NTP first
+                    # answers. That would instantly expire the drip-out window
+                    # and freeze the warning flash mid-shot.
+                    self.shot_stop_time = time.monotonic()
                     
                     # --- FIX: Average is computed right now and NEVER updated again ---
                     self.frozen_avg = self._compute_avg(data.weight)
@@ -656,7 +738,7 @@ class Display:
                 
                 # 3. Catch Drip-Out (Safeguarded by lock)
                 if not data.paddle_on and not self.drip_out_locked:
-                    if (time.time() - self.shot_stop_time) <= Drip_Out_Window:
+                    if (time.monotonic() - self.shot_stop_time) <= Drip_Out_Window:
                         # --- FIX: Only the weight is updated here ---
                         self.frozen_weight = data.weight
                     else:
@@ -666,11 +748,11 @@ class Display:
                 if data.timeout_stop and not self.show_warning:
                     self.show_warning = True
                     self.warn_flash_state = True
-                    self.warn_flash_time = time.time()
+                    self.warn_flash_time = time.monotonic()
 
                 # 5. Update flash state (toggle every 0.5s)
                 if self.show_warning:
-                    now_t = time.time()
+                    now_t = time.monotonic()
                     if (now_t - self.warn_flash_time) >= 0.5:
                         self.warn_flash_state = not self.warn_flash_state
                         self.warn_flash_time = now_t
@@ -718,7 +800,7 @@ class Display:
                 # near-zero samples reach the screen even when no save frame
                 # follows (short or off-target shots are never saved).
                 if (not animating) and self.shot_stop_time:
-                    animating = (time.time() - self.shot_stop_time) <= (Drip_Out_Window + 0.6)
+                    animating = (time.monotonic() - self.shot_stop_time) <= (Drip_Out_Window + 0.6)
                 render_sig = (
                     round(data.weight, 1),
                     round(data.memory.target, 1),
@@ -742,6 +824,7 @@ class Display:
                 )
 
                 if animating or just_woke or data.save_image or render_sig != self.last_render_sig:
+                    render_start = time.monotonic()
                     img = draw_frame(w, h, data, self.display_orientation, display_avg, display_weight,
                                      self.show_warning and self.warn_flash_state)
 
@@ -749,9 +832,38 @@ class Display:
                         self.save_image(img)
                     self.lcd.ShowImage(img, 0, 0)
                     self.last_render_sig = render_sig
+
+                    # Cost of a full frame (PIL draw + SPI push). Summarised once
+                    # per shot below; it is what decides whether the tick rate is
+                    # actually achievable on this hardware.
+                    if data.paddle_on:
+                        render_elapsed = time.monotonic() - render_start
+                        render_count += 1
+                        render_total += render_elapsed
+                        render_max = max(render_max, render_elapsed)
                 # ---------------------
                 
             except Empty:
+                # --- BREW TIMER TICK ---
+                # No new frame within the tick budget while a shot is pouring:
+                # redraw the last one with the elapsed time advanced by real
+                # time. Nothing else in the frame changes, so the state machine
+                # and the graph see exactly what the control loop last sent.
+                if ticking and last_good_data is not None:
+                    if (time.monotonic() - last_real_frame_mono) < TICK_GIVE_UP_SECONDS:
+                        tick = copy.copy(last_good_data)
+                        tick.shot_time_elapsed = (tick_anchor_elapsed +
+                                                  (time.monotonic() - tick_anchor_mono))
+                        # A tick must never re-trigger the shot-history snapshot.
+                        tick.save_image = False
+                        tick_frame = tick
+                        continue
+                    # Producer has gone quiet mid-shot; stop ticking and fall
+                    # through to the normal idle/sleep handling.
+                    logging.warning("No display data for %.0fs during a shot - stopping timer tick"
+                                    % TICK_GIVE_UP_SECONDS)
+                    ticking = False
+
                 # Sleep Logic
                 if screen_is_on:
                     try:

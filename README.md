@@ -1,6 +1,6 @@
 # coffee-by-weight
 
-Weight-based coffee automation on Raspberry Pi. One repo, multiple small controllers ("apps") that share a common core: Bluetooth scale drivers (Acaia and BooKoo), a vendor-neutral scale interface, BLE adapter coordination, and SPI LCD display drivers. Each app runs as its own systemd service on its own Pi.
+Weight-based coffee automation on Raspberry Pi. One repo, multiple small controllers ("apps") that share a common core: Bluetooth scale drivers (Acaia, BooKoo and Timemore), a vendor-neutral scale interface, BLE adapter coordination, and SPI LCD display drivers. Each app runs as its own systemd service on its own Pi.
 
 ## Apps
 
@@ -18,12 +18,12 @@ Grind-by-weight controller for a coffee grinder, built on the same shared core. 
 
 ```
 coffee-by-weight/
-├── common/            shared package: scale drivers (Acaia, BooKoo), vendor-neutral
+├── common/            shared package: scale drivers (Acaia, BooKoo, Timemore), vendor-neutral
 │                      Scale interface, BLE scan lock, WaveShare LCD drivers, fonts
 ├── doc/
 │   ├── lm-bbw/        LM-BBW docs: architecture, wiring photos, enclosure STLs, demo video
 │   ├── grind-bw/      GRIND-BW docs: architecture & status
-│   └── BT_Scales/     Bluetooth scale protocol specs (Acaia, BooKoo Ultra/Mini)
+│   └── BT_Scales/     Bluetooth scale protocol specs (Acaia, BooKoo Ultra/Mini, Timemore)
 ├── lm-bbw/            espresso controller: entry point, app modules, service files, web assets
 ├── grind-bw/          grinder controller (skeleton)
 └── deploy.sh          assembles and deploys one app to /opt/<app> on a Pi
@@ -33,7 +33,9 @@ The `common/` package is shared by all apps. A fix there (for example in a scale
 
 ## Supported scales
 
-Acaia (Lunar, Pyxis, Umbra) and BooKoo (Ultra, Mini), behind one common interface. New vendors can be added with a small driver module registered in `common/scales.py`; the protocol references collected under [`doc/BT_Scales/`](./doc/BT_Scales/) document the Acaia and BooKoo wire protocols.
+Acaia (Lunar, Pyxis, Umbra), BooKoo (Ultra, Mini) and Timemore (Black Mirror), behind one common interface. New vendors can be added with a small driver module registered in `common/scales.py`; the protocol references collected under [`doc/BT_Scales/`](./doc/BT_Scales/) document the Acaia, BooKoo and Timemore wire protocols.
+
+A driver owns its own BLE session: `connect()` mints a fresh stop event, so threads left from a previous session exit instead of adopting the new connection, and every `write_command()` goes through a per-scale lock. Callers must never issue a BLE write from a GPIO callback — see the [LM-BBW architecture doc](./doc/lm-bbw/LM-BBW_Architecture.md).
 
 ## Deploying an app
 
@@ -45,6 +47,8 @@ cd coffee-by-weight
 ./deploy.sh lm-bbw --install     # first time: copies code, installs systemd unit + env
 ./deploy.sh lm-bbw               # afterwards: update + restart
 ```
+
+`--install` also installs and enables `fake-hwclock`. The Pi has no RTC, so without it a boot starts on the previous shutdown's timestamp and then jumps forward when NTP first answers — which makes journals from that boot read as if they happened hours earlier.
 
 Use `grind-bw` in place of `lm-bbw` on the grinder Pi. Per-app setup details (Pi configuration, SPI, dependencies, wiring) are in each app's own README.
 
