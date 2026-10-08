@@ -80,6 +80,13 @@ try:
     BLE_CMD_SLOW_WARN_SECONDS = float(os.environ.get('BLE_CMD_SLOW_WARN_SECONDS', '2.0'))
 except (TypeError, ValueError):
     BLE_CMD_SLOW_WARN_SECONDS = 2.0
+# How long a momentary button may read "pressed" before we call the line stuck.
+# No human holds the memory or target button this long, so a level that stays
+# low past this is the wiring, not a finger. See _button_health_loop.
+try:
+    STUCK_BUTTON_WARN_SECONDS = float(os.environ.get('STUCK_BUTTON_WARN_SECONDS', '10.0'))
+except (TypeError, ValueError):
+    STUCK_BUTTON_WARN_SECONDS = 10.0
 # Bound on queued BLE commands. Small on purpose: if the worker is stuck there
 # is no point piling up tares, and the drop warning names the problem.
 try:
@@ -254,6 +261,24 @@ class ControlManager:
 
         self.tgt_button_was_held = False
 
+        # --- BUTTON LINE HEALTH ---
+        # Every momentary button, by name, so the health poller can read raw
+        # levels. gpiozero only delivers an edge: if a line latches low (sticky
+        # contact, moisture bridging the switch, a damaged input) the press
+        # event fires once and then the button is dead forever, with nothing in
+        # the log to say so -- the memory-bank failure seen on 2026-10-06.
+        # Polling the level is the one check that tells a dead line apart from
+        # a dead callback.
+        self._health_buttons = {
+            "memory":  self.memory_button,
+            "tare":    self.tare_button,
+            "target+": self.tgt_inc_button,
+            "target-": self.tgt_dec_button,
+            "paddle":  self.paddle_switch,
+        }
+        self._stuck_buttons = set()
+        logging.info("Button lines at startup: %s" % self.button_levels())
+
         # START THREADS
         self.wd_thread = threading.Thread(target=self._watchdog_loop)
         self.wd_thread.daemon = True
@@ -266,6 +291,10 @@ class ControlManager:
         self.ble_cmd_thread = threading.Thread(target=self._ble_cmd_loop)
         self.ble_cmd_thread.daemon = True
         self.ble_cmd_thread.start()
+
+        self.health_thread = threading.Thread(target=self._button_health_loop)
+        self.health_thread.daemon = True
+        self.health_thread.start()
 
     # --- GPIO CALLBACK PLUMBING ---
     def _button_event(self, name: str, action: Callable, level=logging.INFO) -> Callable:
@@ -295,6 +324,70 @@ class ControlManager:
             else:
                 logging.log(level, "button %s done (%.3fs)" % (name, elapsed))
         return handler
+
+    def button_levels(self) -> str:
+        """
+        Raw level of every momentary button, e.g. "memory=PRESSED tare=open ...".
+
+        "PRESSED" means the GPIO reads low (pull_up=True). Nobody is touching
+        the buttons most of the time, so anything other than "open" here is a
+        line that is shorted, wet, or on a damaged input.
+        """
+        parts = []
+        for name, button in self._health_buttons.items():
+            try:
+                parts.append("%s=%s" % (name, "PRESSED" if button.is_pressed else "open"))
+            except Exception as ex:
+                parts.append("%s=?(%s)" % (name, ex))
+        return " ".join(parts)
+
+    def _button_health_loop(self):
+        """
+        Watch for a button line that latches in the pressed state.
+
+        gpiozero fires when_pressed on the falling edge only. A line that goes
+        low and stays low therefore produces exactly one event and then nothing,
+        for as long as it stays low -- the button looks dead while the rest of
+        the system (and every other pin) keeps working. That is indistinguish-
+        able from a dead callback in the log unless somebody reads the level,
+        which is what this does: one WARNING when a line latches, one INFO when
+        it lets go, and the elapsed time in between.
+        """
+        logging.info("Button Health Monitor Started")
+        pressed_since = {}
+
+        while self.running:
+            now = timer()
+            for name, button in self._health_buttons.items():
+                try:
+                    is_pressed = button.is_pressed
+                except Exception as ex:
+                    logging.warning("Button health: cannot read %s: %s" % (name, ex))
+                    continue
+
+                if is_pressed:
+                    pressed_since.setdefault(name, now)
+                    held = now - pressed_since[name]
+                    if held >= STUCK_BUTTON_WARN_SECONDS and name not in self._stuck_buttons:
+                        self._stuck_buttons.add(name)
+                        logging.warning(
+                            "Button line '%s' has read PRESSED for %.0fs - the line is stuck "
+                            "low. No further press events can fire on this pin until it "
+                            "releases. Check the switch/wiring (all lines: %s)"
+                            % (name, held, self.button_levels()))
+                else:
+                    if name in self._stuck_buttons:
+                        logging.info("Button line '%s' released after %.0fs stuck low - "
+                                     "presses work again"
+                                     % (name, now - pressed_since.get(name, now)))
+                        self._stuck_buttons.discard(name)
+                    pressed_since.pop(name, None)
+
+            time.sleep(0.2)
+
+    def stuck_buttons(self) -> str:
+        """Comma-separated names of latched-low button lines, or "" if none."""
+        return ",".join(sorted(self._stuck_buttons))
 
     def _submit_ble(self, name: str, command: Callable):
         """

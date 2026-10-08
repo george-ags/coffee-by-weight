@@ -259,9 +259,13 @@ def main():
             if hb_elapsed >= LOOP_HEARTBEAT_SECONDS:
                 state = "brewing" if relay_is_on else ("asleep" if mgr.is_sleeping else "idle")
                 scale_state = ("connected (%.1fg)" % scale.weight) if is_connected else "disconnected"
-                logging.info("Alive: %.1f loops/s, scale %s, bank %s, %s"
+                # Naming a stuck line here means the heartbeat alone explains a
+                # button that "does nothing": a latched-low pin fires no edges.
+                stuck = mgr.stuck_buttons()
+                stuck_state = (", STUCK BUTTON LINES: %s" % stuck) if stuck else ""
+                logging.info("Alive: %.1f loops/s, scale %s, bank %s, %s%s"
                              % (hb_iterations / hb_elapsed, scale_state,
-                                mgr.current_memory().name, state))
+                                mgr.current_memory().name, state, stuck_state))
                 hb_last = now
                 hb_iterations = 0
 
