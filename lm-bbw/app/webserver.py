@@ -27,6 +27,11 @@ KNOWN_CONFIG_KEYS = {
     'GRAPH_HISTORY_SECONDS': '60',
     'GRAPH_MAX_VALUE': '4',
     'GRAPH_MAX_DENSITY_THRESHOLD': '6',
+    # Graph smoothing: 'causal' (append-only -- a drawn point never moves,
+    # window given by FLOW_SMOOTHING_SECONDS) or 'centered' (the old rolling
+    # mean FLOW_SMOOTHING_FACTOR wide, which redraws the curve every frame).
+    'FLOW_SMOOTHING_MODE': 'causal',
+    'FLOW_SMOOTHING_SECONDS': '3.0',
     'FLOW_SMOOTHING_FACTOR': '30',
     'IDLE_TIMEOUT': '300',
     'READY_SCREEN_TIMEOUT': '180',
@@ -47,6 +52,7 @@ KNOWN_CONFIG_KEYS = {
     'BUTTON_SLOW_WARN_SECONDS': '0.5',
     'BLE_CMD_SLOW_WARN_SECONDS': '2.0',
     'BLE_CMD_QUEUE_DEPTH': '4',
+    'STUCK_BUTTON_WARN_SECONDS': '10',
     'MEMORY_A_NAME': '',
     'MEMORY_B_NAME': '',
     'MEMORY_C_NAME': '',

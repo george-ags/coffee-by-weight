@@ -51,6 +51,40 @@ Graph_Max_Display_Value = 4
 Graph_Density_Threshold = 6
 Drip_Out_Window = float(os.environ.get('DRIP_OUT_WINDOW', '3.5'))
 
+# --- FLOW CURVE SMOOTHING ---
+# FLOW_SMOOTHING_MODE picks how raw flow samples become the drawn curve:
+#
+#   causal   (default) Append-only: point i is the mean of the last
+#            FLOW_SMOOTHING_SECONDS of samples up to and including i. Nothing
+#            looks forward, so a point that has been drawn keeps its height for
+#            the rest of the shot -- only the right edge of the curve moves.
+#
+#   centered The old behaviour: a rolling mean FLOW_SMOOTHING_FACTOR wide
+#            centred on each point. No lag, but every new sample re-averages
+#            its neighbours, so the whole visible curve shifts frame after
+#            frame.
+#
+# The cost of never redrawing is lag: a trailing mean sits about half a window
+# behind the truth. That is the trade. It cannot be avoided by being clever
+# with single samples -- one raw sample is far too noisy to draw as-is. At
+# REFRESH_RATE=0.3 with a 0.1 g scale, one quantisation step is 0.33 g/s, so
+# the raw curve hashes up and down by a third of a gram per second even while
+# the flow is perfectly steady. Averaging is what removes that, and a causal
+# filter can only average backwards.
+FLOW_SMOOTHING_MODE = os.environ.get('FLOW_SMOOTHING_MODE', 'causal').strip().lower()
+
+# Causal window, in SECONDS of flow history rather than a sample count, so the
+# smoothing (and its lag) stay put when REFRESH_RATE changes. ~3 s cuts the
+# quantisation noise to roughly a third while trailing the truth by ~1.5 s,
+# which is a small slice of a 25-30 s espresso graph.
+try:
+    FLOW_SMOOTHING_SECONDS = float(os.environ.get('FLOW_SMOOTHING_SECONDS', '3.0'))
+except (TypeError, ValueError):
+    FLOW_SMOOTHING_SECONDS = 3.0
+# Fallback window (in samples) for the first frames of a shot, before the loop
+# has measured its own interval.
+FLOW_CAUSAL_WINDOW_FALLBACK = 10
+
 # --- SCREEN CONFIGURATION ---
 display_brightness = int(os.environ.get('DISPLAY_BRIGHTNESS', '100'))
 
@@ -441,9 +475,54 @@ class DisplayData:
         # True when the hardware tare could not be confirmed for this shot.
         self.tare_failed = tare_failed
 
-    def flow_rate_moving_avg(self) -> list:
+    def flow_rate_display_curve(self) -> list:
+        """
+        The flow values the graph draws, one per raw sample.
+
+        Dispatches on FLOW_SMOOTHING_MODE; see the notes beside that constant.
+        """
         if not self.flow_data:
             return []
+        if FLOW_SMOOTHING_MODE == 'centered':
+            return self._flow_rate_moving_avg()
+        return self._flow_rate_causal()
+
+    def _causal_window(self) -> int:
+        """Causal window as a sample count, from FLOW_SMOOTHING_SECONDS."""
+        # sample_rate is the measured loop interval and is 0.0 on the very
+        # first frame, so fall back rather than divide by zero.
+        if self.sample_rate and self.sample_rate > 0:
+            return max(1, round(FLOW_SMOOTHING_SECONDS / self.sample_rate))
+        return FLOW_CAUSAL_WINDOW_FALLBACK
+
+    def _flow_rate_causal(self) -> list:
+        """
+        Append-only curve: point i is the mean of the last W samples ending at
+        i, and never looks at i+1 or beyond.
+
+        That is the whole requirement. The renderer rebuilds this list from
+        scratch every frame, but since no point depends on a later sample, the
+        prefix comes out identical every time -- a point that has been drawn
+        stays exactly where it was drawn for the rest of the shot, and only the
+        newest point is ever decided. No state has to survive between frames,
+        which matters because the display runs in its own process.
+
+        The window grows into place at the start (point 0 is the raw sample,
+        point 1 the mean of two, and so on), so the curve begins at the origin
+        instead of waiting W samples to appear.
+        """
+        data = list(self.flow_data)
+        window = self._causal_window()
+        out = []
+        running = 0.0
+        for i, value in enumerate(data):
+            running += value
+            if i >= window:
+                running -= data[i - window]
+            out.append(running / min(i + 1, window))
+        return out
+
+    def _flow_rate_moving_avg(self) -> list:
         data = list(self.flow_data)
         s = pd.Series(data)
         # Centered rolling mean: averages flow_smooth_factor//2 samples on each
@@ -1056,7 +1135,7 @@ def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayO
 
     # --- 6. GRAPH ---
     if data.flow_data is not None and len(data.flow_data) > 0:
-        flow_rate_data = data.flow_rate_moving_avg()
+        flow_rate_data = data.flow_rate_display_curve()
         
         # Determine average value: Prefer sticky frozen val, else calculate on fly (rare)
         final_avg_val = frozen_avg

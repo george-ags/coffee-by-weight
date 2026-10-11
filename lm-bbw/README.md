@@ -229,7 +229,9 @@ Settings are environment variables read at startup from `/etc/default/lm-bbw.env
 | `GRAPH_HISTORY_SECONDS` | `60` | Seconds of flow history shown on the graph |
 | `GRAPH_MAX_VALUE` | `4` | Top of the graph's y-axis, in g/s |
 | `GRAPH_MAX_DENSITY_THRESHOLD` | `6` | Above this max value, only even gridlines are labelled |
-| `FLOW_SMOOTHING_FACTOR` | `30` | Window size of the centered moving average applied to the flow line |
+| `FLOW_SMOOTHING_MODE` | `causal` | How raw flow samples become the drawn curve: `causal` (append-only — a drawn point never moves again) or `centered` (the old rolling mean, which redraws the curve every frame) |
+| `FLOW_SMOOTHING_SECONDS` | `3.0` | `causal` mode only: seconds of flow history averaged into each point. The line trails the truth by about half this |
+| `FLOW_SMOOTHING_FACTOR` | `30` | `centered` mode only: window size of the centered moving average applied to the flow line |
 | `DRIP_OUT_WINDOW` | `3.5` | Seconds after the shot stops during which weight/graph keep updating for drip-out |
 | `READY_SCREEN_TIMEOUT` | `180` | Idle seconds after which the screen reverts to the logo/ready view (stays connected) |
 | `IDLE_TIMEOUT` | `300` | Idle seconds before full sleep: disconnect the scale and turn the screen off |
@@ -246,6 +248,7 @@ Settings are environment variables read at startup from `/etc/default/lm-bbw.env
 | `BUTTON_SLOW_WARN_SECONDS` | `0.5` | Warn when a button handler takes longer than this (it delays every other button) |
 | `BLE_CMD_SLOW_WARN_SECONDS` | `2.0` | Warn when a BLE command (tare) takes longer than this |
 | `BLE_CMD_QUEUE_DEPTH` | `4` | BLE commands allowed to queue behind a stuck one before further ones are dropped |
+| `STUCK_BUTTON_WARN_SECONDS` | `10` | Warn when a button line keeps reading *pressed* for this long — the line is stuck low and no further presses can fire on that pin |
 
 > Keep `READY_SCREEN_TIMEOUT` ≤ `IDLE_TIMEOUT` so the ready screen appears before the system fully sleeps.
 
@@ -393,6 +396,16 @@ Two rules hold the button path together. Every callback is wrapped by `_button_e
 Defines how the screen is drawn, updates the physical display, and saves images of finished shots. It runs in a separate process so rendering never blocks control or Bluetooth logic — the main loop pushes the latest data onto a queue, which the display process drains each refresh.
 
 The brew timer is drawn to 0.1 s, but frames only arrive at `REFRESH_RATE`. So while a shot is pouring the display ticks on its own: if no frame arrives within `TIMER_TICK_SECONDS` it redraws the last one with the elapsed time advanced from a monotonic anchor. Ticks are inert — a shallow copy with only the timer changed and the image-save flag cleared — so sampling, smoothing and the graph stay entirely on `REFRESH_RATE`. If a panel can't render that fast it simply draws as fast as it can (no busy-spin), and each shot logs one `Shot render:` line with the average and worst frame time so you can tell which case you are in. Graph rendering uses simple lines (a deliberate choice after matplotlib proved too CPU-heavy and other libraries had their own drawbacks).
+
+**Flow curve (`FLOW_SMOOTHING_MODE`).** In the default `causal` mode each point is the mean of the last `FLOW_SMOOTHING_SECONDS` of samples *ending at that point*. Nothing looks forward, so a point that has been drawn keeps its height for the rest of the shot and only the newest point is ever decided. The curve is rebuilt from scratch every frame, but since no point depends on a later sample the prefix comes out identical each time — which is why no state has to cross into the display process. The window grows into place at the start, so the line begins at the origin rather than appearing a window late.
+
+The price of never redrawing is lag: a trailing mean sits about half a window behind the truth. That trade is unavoidable, not an implementation detail. A single raw sample is far too noisy to draw as-is — at `REFRESH_RATE=0.3` with a 0.1 g scale, one quantisation step is 0.33 g/s, so the raw curve hashes by a third of a gram per second even while the flow is perfectly steady (≈14 px on the landscape graph). Averaging is what removes it, and a causal filter can only average backwards. At the default 3 s that hash drops to ≈3 px for ≈1.5 s of lag on a 25–30 s shot.
+
+`FLOW_SMOOTHING_MODE=centered` restores the previous behaviour: a mean taken from both sides of each point, `FLOW_SMOOTHING_FACTOR` wide. No lag, but every new sample re-averages its neighbours, so the already-drawn curve shifts under itself frame after frame.
+
+### Button lines
+
+gpiozero only fires on the falling edge, so a line that goes low and *stays* low (sticky switch, moisture bridging the contacts, a damaged input) produces exactly one press event and then nothing — the button looks dead while every other pin keeps working, and the log says nothing at all. `_button_health_loop()` in `app/control.py` polls the raw level of every momentary button and logs one warning naming any line that has read pressed for longer than `STUCK_BUTTON_WARN_SECONDS`, plus one line when it releases. While a line is latched the `Alive:` heartbeat carries `STUCK BUTTON LINES: <name>`. Startup logs all levels once (`Button lines at startup: ...`).
 
 ### Main loop (`lm-bbw.py`)
 
